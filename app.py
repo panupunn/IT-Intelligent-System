@@ -7,7 +7,7 @@ v11:
   * ค้นหาอัตโนมัติจากโฟลเดอร์ ./fonts, Windows Fonts, และตำแหน่งทั่วไปบน Linux/Mac
   * หัวตารางใช้ฟอนต์หนา ถ้ามีไฟล์ Bold
   * ถ้าไม่พบฟอนต์ จะแจ้งเตือนในหน้าเว็บให้ติดตั้ง และยังสร้าง PDF ได้ด้วยฟอนต์เริ่มต้น
-- รวมทุกฟีเจอร์จาก v10 (Dashboard, Stock, เบิก/รับ, รายงาน, Users, Import, Settings + Clear test data)
+- รวมทุกฟีเจอร์จาก v10 (Dashboard, Stock, เบิก/รับ, รายงาน, Users, นำเข้า/แก้ไข หมวดหมู่, Settings + Clear test data)
 """
 import os, io, uuid, re
 from datetime import datetime, timedelta, date, time as dtime
@@ -643,7 +643,7 @@ def page_stock(sh):
             with st.form("item_add", clear_on_submit=True):
                 c1,c2,c3 = st.columns(3)
                 with c1:
-                    if cats.empty: st.info("ยังไม่มีหมวดหมู่ในชีต Categories (ใช้เมนู Import เพื่อเพิ่ม)"); cat_opt=""
+                    if cats.empty: st.info("ยังไม่มีหมวดหมู่ในชีต Categories (ใช้เมนู นำเข้า/แก้ไข หมวดหมู่ เพื่อเพิ่ม)"); cat_opt=""
                     else:
                         opts = (cats["รหัสหมวด"]+" | "+cats["ชื่อหมวด"]).tolist(); selected = st.selectbox("หมวดหมู่", options=opts)
                         cat_opt = selected.split(" | ")[0]
@@ -731,7 +731,7 @@ def page_issue_receive(sh):
             with c1: item = st.selectbox("เลือกอุปกรณ์", options=items["รหัส"]+" | "+items["ชื่ออุปกรณ์"])
             with c2: qty = st.number_input("จำนวนที่เบิก", min_value=1, value=1, step=1)
             if branches.empty:
-                branch_sel = st.text_input("สาขา/หน่วยงานผู้ขอ (ยังไม่มีรายการสาขา ให้พิมพ์เองหรือ Import)")
+                branch_sel = st.text_input("สาขา/หน่วยงานผู้ขอ (ยังไม่มีรายการสาขา ให้พิมพ์เองหรือ นำเข้า/แก้ไข หมวดหมู่)")
             else:
                 br_opts = (branches["รหัสสาขา"] + " | " + branches["ชื่อสาขา"]).tolist() + ["พิมพ์เอง"]
                 br_pick = st.selectbox("สาขา/หน่วยงานผู้ขอ", options=br_opts)
@@ -1027,7 +1027,7 @@ def page_settings():
 
         st.success(f"ลบข้อมูลทดสอบเรียบร้อย • Transactions: {removed_txn} แถว • Items: {removed_items} แถว")
     st.markdown("</div>", unsafe_allow_html=True)
-# ---------- Import Page (Categories / Branches / Items) ----------
+# ---------- นำเข้า/แก้ไข หมวดหมู่ Page (Categories / Branches / Items) ----------
 def _read_upload_df(file):
     if file is None: return None, "ยังไม่ได้เลือกไฟล์"
     name = file.name.lower()
@@ -1047,8 +1047,31 @@ def _read_upload_df(file):
 
 
 def page_import(sh):
+    st.subheader("นำเข้า/แก้ไข หมวดหมู่")
+
+    # โหลดข้อมูลหมวดหมู่จากชีต
+    cats = read_df(sh, SHEET_CATEGORIES)
+    st.dataframe(cats)
+
+    with st.form("edit_category_form", clear_on_submit=False):
+        cat_code = st.text_input("รหัสหมวดหมู่")
+        cat_name = st.text_input("ชื่อหมวดหมู่")
+        submitted = st.form_submit_button("บันทึก/แก้ไข")
+    if submitted:
+        if cat_code.strip() != "" and cat_name.strip() != "":
+            # ถ้ามีรหัสหมวดหมู่เดิมแล้ว ให้แก้ไขชื่อแทน
+            mask = cats["รหัสหมวดหมู่"] == cat_code
+            if mask.any():
+                cats.loc[mask, "ชื่อหมวดหมู่"] = cat_name
+            else:
+                cats.loc[len(cats)] = [cat_code, cat_name]
+            write_df(sh, SHEET_CATEGORIES, cats)
+            st.success("อัปเดตหมวดหมู่แล้ว")
+            safe_rerun()
+        else:
+            st.warning("กรุณากรอกรหัสและชื่อหมวดหมู่ให้ครบ")
     st.markdown("<div class='block-card'>", unsafe_allow_html=True)
-    st.subheader("📥 Import / เพิ่มข้อมูล (หมวดหมู่ / สาขา / อุปกรณ์ / หมวดหมู่ปัญหา)")
+    st.subheader("📥 นำเข้า/แก้ไข หมวดหมู่ / เพิ่มข้อมูล (หมวดหมู่ / สาขา / อุปกรณ์ / หมวดหมู่ปัญหา)")
     st.caption("อัปโหลด CSV/Excel หรือ เพิ่มเองหลายรายการพร้อมการตรวจสอบความถูกต้อง")
 
     if st.session_state.get("role") not in ("admin","staff"):
@@ -1411,7 +1434,7 @@ def main():
     if "sheet_url" not in st.session_state or not st.session_state.get("sheet_url"): st.session_state["sheet_url"] = DEFAULT_SHEET_URL
     with st.sidebar:
         st.markdown("---")
-        page = st.radio("เมนู", ["Dashboard","Stock","แจ้งปัญหา","เบิก/รับเข้า","รายงาน","ผู้ใช้","Import","Settings"], index=0)
+        page = st.radio("เมนู", ["Dashboard","Stock","แจ้งปัญหา","เบิก/รับเข้า","รายงาน","ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","Settings"], index=0)
     if page == "Settings":
         page_settings(); st.caption("© 2025 IT Stock · Streamlit + Google Sheets"); return
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
@@ -1429,7 +1452,7 @@ def main():
     elif page=="เบิก/รับเข้า": page_issue_receive(sh)
     elif page=="รายงาน": page_reports(sh)
     elif page=="ผู้ใช้": page_users_admin(sh)
-    elif page=="Import": page_import(sh)
+    elif page=="นำเข้า/แก้ไข หมวดหมู่": page_import(sh)
     st.caption("© 2025 IT Stock · Streamlit + Google Sheets")
 
 if __name__ == "__main__":
