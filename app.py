@@ -23,6 +23,15 @@ from google.oauth2.service_account import Credentials
 import bcrypt
 import altair as alt
 
+# ---- Compatibility helper for Streamlit rerun ----
+def safe_rerun():
+    import streamlit as st
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        safe_rerun()
+
+
 APP_TITLE = "IT Intelligent System"
 APP_TAGLINE = "Minimal, Modern, and Practical"
 DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/1SGKzZ9WKkRtcmvN3vZj9w2yeM6xNoB6QV3-gtnJY-Bw/edit?gid=0#gid=0"
@@ -567,7 +576,7 @@ def page_tickets(sh):
             row = [tid, get_now_str(), branch_sel, reporter, cate, detail, "รับแจ้ง", assignee, get_now_str(), note]
             append_row(sh, SHEET_TICKETS, row)
             st.success(f"รับแจ้งเรียบร้อย (Ticket: {tid})")
-            st.experimental_rerun()
+            safe_rerun()
 
     with t_update:
         if tickets.empty:
@@ -604,13 +613,13 @@ def page_tickets(sh):
                     if delete:
                         df = df[df["TicketID"] != pick]
                         write_df(sh, SHEET_TICKETS, df)
-                        st.success("ลบแล้ว"); st.experimental_rerun()
+                        st.success("ลบแล้ว"); safe_rerun()
                     else:
                         if done: status = "ดำเนินการเสร็จ"
                         df.loc[df["TicketID"]==pick, ["สาขา","ผู้แจ้ง","หมวดหมู่","รายละเอียด","สถานะ","ผู้รับผิดชอบ","อัปเดตล่าสุด","หมายเหตุ"]] = \
                             [branch, reporter, cate, detail, status, assignee, get_now_str(), note]
                         write_df(sh, SHEET_TICKETS, df)
-                        st.success("อัปเดตแล้ว"); st.experimental_rerun()
+                        st.success("อัปเดตแล้ว"); safe_rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -661,7 +670,7 @@ def page_stock(sh):
                         items.loc[items["รหัส"]==gen_code, ITEMS_HEADERS] = [gen_code, cat_opt, name, unit, qty, rop, loc, active]
                     else:
                         items = pd.concat([items, pd.DataFrame([[gen_code, cat_opt, name, unit, qty, rop, loc, active]], columns=ITEMS_HEADERS)], ignore_index=True)
-                    write_df(sh, SHEET_ITEMS, items); st.success(f"บันทึกเรียบร้อย (รหัส: {gen_code})"); st.experimental_rerun()
+                    write_df(sh, SHEET_ITEMS, items); st.success(f"บันทึกเรียบร้อย (รหัส: {gen_code})"); safe_rerun()
 
         with t_edit:
             st.caption("เลือก 'รหัสอุปกรณ์' เพื่อโหลดขึ้นมาปรับแก้ หรือกดลบ")
@@ -701,9 +710,9 @@ def page_stock(sh):
                         s_del  = col_delete.form_submit_button("🗑️ ลบรายการ", use_container_width=True)
                     if s_save:
                         items.loc[items["รหัส"]==pick, ITEMS_HEADERS] = [pick, row["หมวดหมู่"], name, unit, qty, rop, loc, "Y" if active=="Y" else "N"]
-                        write_df(sh, SHEET_ITEMS, items); st.success("อัปเดตแล้ว"); st.experimental_rerun()
+                        write_df(sh, SHEET_ITEMS, items); st.success("อัปเดตแล้ว"); safe_rerun()
                     if s_del:
-                        items = items[items["รหัส"]!=pick]; write_df(sh, SHEET_ITEMS, items); st.success(f"ลบ {pick} แล้ว"); st.experimental_rerun()
+                        items = items[items["รหัส"]!=pick]; write_df(sh, SHEET_ITEMS, items); st.success(f"ลบ {pick} แล้ว"); safe_rerun()
 
 def group_period(df, period="ME"):
     dfx = df.copy(); dfx["วันเวลา"] = pd.to_datetime(dfx["วันเวลา"], errors='coerce'); dfx = dfx.dropna(subset=["วันเวลา"])
@@ -741,7 +750,7 @@ def page_issue_receive(sh):
         if s:
             code = item.split(" | ")[0]
             ok = adjust_stock(sh, code, -qty, st.session_state.get("user","unknown"), branch_sel, note, "OUT", ts_str=ts_str)
-            if ok: st.success("บันทึกแล้ว"); st.experimental_rerun()
+            if ok: st.success("บันทึกแล้ว"); safe_rerun()
 
     with t2:
         with st.form("recv", clear_on_submit=True):
@@ -761,7 +770,7 @@ def page_issue_receive(sh):
         if s:
             code = item.split(" | ")[0]
             ok = adjust_stock(sh, code, qty, st.session_state.get("user","unknown"), branch, note, "IN", ts_str=ts_str)
-            if ok: st.success("บันทึกรับเข้าแล้ว"); st.experimental_rerun()
+            if ok: st.success("บันทึกรับเข้าแล้ว"); safe_rerun()
 
 
 
@@ -941,7 +950,7 @@ def page_users_admin(sh):
                 users.loc[users["Username"]==uname, USERS_HEADERS] = [uname, dname, role, hash_str, active]
             else:
                 users = pd.concat([users, pd.DataFrame([[uname, dname, role, hash_str, active]], columns=USERS_HEADERS)], ignore_index=True)
-            write_df(sh, SHEET_USERS, users); st.success("บันทึกแล้ว"); st.experimental_rerun()
+            write_df(sh, SHEET_USERS, users); st.success("บันทึกแล้ว"); safe_rerun()
 
 def is_test_text(s: str) -> bool:
     s = str(s).lower()
