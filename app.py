@@ -1051,6 +1051,10 @@ def page_import(sh):
 
     # โหลดข้อมูลหมวดหมู่จากชีต
     cats = read_df(sh, SHEET_CATEGORIES)
+if "รหัสหมวดหมู่" not in cats.columns or "ชื่อหมวดหมู่" not in cats.columns:
+    # สร้างคอลัมน์เริ่มต้นถ้ายังไม่มี
+    if "รหัสหมวดหมู่" not in cats.columns: cats["รหัสหมวดหมู่"] = ""
+    if "ชื่อหมวดหมู่" not in cats.columns: cats["ชื่อหมวดหมู่"] = ""
     st.dataframe(cats)
 
     with st.form("edit_category_form", clear_on_submit=False):
