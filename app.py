@@ -1081,7 +1081,6 @@ if "รหัสหมวดหมู่" not in cats.columns or "ชื่อ�
     if st.session_state.get("role") not in ("admin","staff"):
         st.info("เฉพาะ admin/staff เท่านั้น")
         st.markdown("</div>", unsafe_allow_html=True)
-        return
 
     # ===== ปุ่มดาวน์โหลดเทมเพลต =====
     t1, t2, t3, t4 = st.columns(4)
