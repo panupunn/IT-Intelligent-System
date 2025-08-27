@@ -1050,7 +1050,11 @@ def page_import(sh):
     st.subheader("นำเข้า/แก้ไข หมวดหมู่")
 
     # โหลดข้อมูลหมวดหมู่จากชีต
-    cats = read_df(sh, SHEET_CATEGORIES)
+    try:
+        cats = read_df(sh, SHEET_CATEGORIES)
+    except Exception:
+        import pandas as pd
+        cats = pd.DataFrame(columns=["รหัสหมวดหมู่","ชื่อหมวดหมู่"])
     if "รหัสหมวดหมู่" not in cats.columns or "ชื่อหมวดหมู่" not in cats.columns:
         # สร้างคอลัมน์เริ่มต้นถ้ายังไม่มี
         if "รหัสหมวดหมู่" not in cats.columns: cats["รหัสหมวดหมู่"] = ""
