@@ -410,7 +410,7 @@ def page_dashboard(sh):
             tmp = tx_out_disp.groupby("สาขาแสดง", dropna=False)["จำนวน"].sum().reset_index()
             charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", tmp, "สาขาแสดง", "จำนวน"))
         else:
-            charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", pd.DataFrame({"สาขา":[], "จำนวน":[]}), "สาขา", "จำนวน"))
+            charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", pd.DataFrame({"สาขาแสดง":[], "จำนวน":[]}), "สาขา", "จำนวน"))
 
     if "เบิกตามอุปกรณ์ (OUT)" in chart_opts:
         if not tx_out.empty:
@@ -439,24 +439,43 @@ def page_dashboard(sh):
     else:
         tdf = tickets_df
 
-    tdf_disp = ensure_branch_display(tdf, sh=sh)
+
+        tdf_disp = ensure_branch_display(tdf, sh=sh)
 
         if "Ticket ตามสถานะ" in chart_opts:
-        if not tdf.empty:
-            tmp = tdf.groupby("สถานะ")["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวน"})
-            charts.append((f"Ticket ตามสถานะ {start_date} ถึง {end_date}", tmp, "สถานะ", "จำนวน"))
-        else:
-            charts.append((f"Ticket ตามสถานะ {start_date} ถึง {end_date}", pd.DataFrame({"สถานะ":[], "จำนวน":[]}), "สถานะ", "จำนวน"))
 
-    if "Ticket ตามสาขา" in chart_opts:
-        if not tdf.empty:
-            tmp = tdf_disp.groupby("สาขาแสดง", dropna=False)["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวน"})
-            charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", tmp, "สาขาแสดง", "จำนวน"))
-        else:
-            charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", pd.DataFrame({"สาขา":[], "จำนวน":[]}), "สาขา", "จำนวน"))
+            if not tdf.empty:
 
-    if len(charts)==0:
-        st.info("โปรดเลือกกราฟที่ต้องการแสดงจากด้านบน")
+                tmp = tdf.groupby("สถานะ")["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวน"})
+
+                charts.append((f"Ticket ตามสถานะ {start_date} ถึง {end_date}", tmp, "สถานะ", "จำนวน"))
+
+            else:
+
+                charts.append((f"Ticket ตามสถานะ {start_date} ถึง {end_date}", pd.DataFrame({"สถานะ":[], "จำนวน":[]}), "สถานะ", "จำนวน"))
+
+
+        if "Ticket ตามสาขา" in chart_opts:
+
+
+            if not tdf.empty:
+
+
+                tmp = tdf_disp.groupby("สาขาแสดง", dropna=False)["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวน"})
+
+
+                charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", tmp, "สาขาแสดง", "จำนวน"))
+
+
+            else:
+
+
+                charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", pd.DataFrame({"สาขาแสดง":[], "จำนวน":[]}), "สาขาแสดง", "จำนวน"))
+
+
+
+        if len(charts)==0:
+            st.info("โปรดเลือกกราฟที่ต้องการแสดงจากด้านบน")
     else:
         rows = (len(charts) + per_row - 1) // per_row
         idx = 0
