@@ -10,49 +10,9 @@ v11:
   * ถ้าไม่พบฟอนต์ จะแจ้งเตือนในหน้าเว็บให้ติดตั้ง และยังสร้าง PDF ได้ด้วยฟอนต์เริ่มต้น
 - รวมทุกฟีเจอร์จาก v10 (Dashboard, Stock, เบิก/รับ, รายงาน, Users, นำเข้า/แก้ไข หมวดหมู่, Settings + Clear test data)
 """
-import os, io, uuid, re
+import os, io, uuid, re, time
 from datetime import datetime, timedelta, date, time as dtime
 import pytz, pandas as pd, streamlit as st
-
-try:
-    # Prefer external helper if present alongside the app
-    from branch_display_helpers import ensure_branch_display  # type: ignore
-except Exception:
-    # Fallback: lightweight inline helper to always display "CODE | NAME" when possible
-    def ensure_branch_display(df, sh=None, extras=None, new_col=True, new_col_name="สาขาแสดง"):
-        import pandas as pd
-        if df is None or not isinstance(df, pd.DataFrame) or df.empty or ("สาขา" not in df.columns):
-            return df.copy() if isinstance(df, pd.DataFrame) else df
-        # Build mapping from existing "CODE | NAME" values in the dataframe itself
-        mapping = {}
-        try:
-            uniq = df["สาขา"].dropna().astype(str).unique().tolist()
-            for s in uniq:
-                parts = [p.strip() for p in s.split("|", 1)]
-                code = parts[0]
-                name = parts[1] if len(parts) > 1 else None
-                if code and name:
-                    mapping[code] = name
-        except Exception:
-            pass
-        if extras:
-            try:
-                mapping.update(extras)
-            except Exception:
-                pass
-        def _fmt(v):
-            s = "" if v is None else str(v)
-            parts = [p.strip() for p in s.split("|", 1)]
-            code = parts[0] if parts else ""
-            name = parts[1] if len(parts) > 1 else mapping.get(code)
-            return f"{code} | {name}" if (code and name) else code
-        out = df.copy()
-        if new_col:
-            out[new_col_name] = out["สาขา"].apply(_fmt)
-        else:
-            out["สาขา"] = out["สาขา"].apply(_fmt)
-        return out
-
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -60,11 +20,28 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 import gspread
+from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
 import bcrypt
 import altair as alt
 
 # ---- Compatibility helper for Streamlit rerun ----
+
+# -------------------- User helper --------------------
+def get_username():
+    """
+    ดึงชื่อผู้ใช้จาก session_state ให้รองรับหลาย key
+    ถ้าไม่พบจะคืนค่า "unknown" เพื่อกัน NameError/KeyError
+    """
+    import streamlit as st
+    return (
+        st.session_state.get("user")
+        or st.session_state.get("username")
+        or st.session_state.get("display_name")
+        or "unknown"
+    )
+# -----------------------------------------------------
+
 def safe_rerun():
     import streamlit as st
     if hasattr(st, "rerun"):
@@ -144,11 +121,49 @@ def ensure_sheets_exist(sh):
     if SHEET_TICKET_CATS not in titles:
         ws = sh.add_worksheet(SHEET_TICKET_CATS, 200, len(TICKET_CAT_HEADERS)+2); ws.append_row(TICKET_CAT_HEADERS)
 
-def read_df(sh, title, headers):
-    ws = sh.worksheet(title); vals = ws.get_all_values()
-    if not vals: return pd.DataFrame(columns=headers)
-    df = pd.DataFrame(vals[1:], columns=vals[0])
-    return df if not df.empty else pd.DataFrame(columns=headers)
+# ---- Lightweight in-process cache for Google Sheets reads ----
+_READ_CACHE = {}
+
+def clear_read_cache():
+    _READ_CACHE.clear()
+
+def _get_all_values_with_retry(ws, max_attempts: int = 5):
+    # Call ws.get_all_values() with simple exponential backoff for 429/5xx errors.
+    for attempt in range(max_attempts):
+        try:
+            return ws.get_all_values()
+        except Exception as e:
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            message = str(e)
+            retryable = (status in (429, 500, 503)) or ('429' in message) or ('Quota exceeded' in message)
+            if not retryable or attempt == max_attempts - 1:
+                raise
+            sleep_s = min(2 ** attempt, 16)
+            time.sleep(sleep_s)
+
+def read_df(sh, title, headers, _ttl_seconds: int = 15):
+    # Read a worksheet into DataFrame with retry + short-term caching.
+    try:
+        sh_id = getattr(sh, 'id', None) or getattr(sh, 'spreadsheet_id', None) or 'unknown'
+    except Exception:
+        sh_id = 'unknown'
+    key = (str(sh_id), str(title), tuple(headers))
+    now = time.time()
+    entry = _READ_CACHE.get(key)
+    if entry and (now - entry['ts'] < _ttl_seconds):
+        return entry['df'].copy()
+
+    ws = sh.worksheet(title)
+    vals = _get_all_values_with_retry(ws)
+    if not vals:
+        df = pd.DataFrame(columns=headers)
+    else:
+        df = pd.DataFrame(vals[1:], columns=vals[0])
+        if df.empty:
+            df = pd.DataFrame(columns=headers)
+
+    _READ_CACHE[key] = {'df': df.copy(), 'ts': now}
+    return df
 
 def write_df(sh, title, df):
     if title==SHEET_ITEMS: cols=ITEMS_HEADERS
@@ -162,8 +177,11 @@ def write_df(sh, title, df):
     df = df[cols]
     ws = sh.worksheet(title)
     ws.clear(); ws.update([df.columns.values.tolist()] + df.values.tolist())
+    clear_read_cache()
 
-def append_row(sh, title, row): sh.worksheet(title).append_row(row)
+def append_row(sh, title, row):
+    sh.worksheet(title).append_row(row)
+    clear_read_cache()
 
 def auth_block(sh):
     st.session_state.setdefault("user", None); st.session_state.setdefault("role", None)
@@ -421,7 +439,6 @@ def page_dashboard(sh):
         tx = tx[(tx["วันเวลา"].dt.date >= start_date) & (tx["วันเวลา"].dt.date <= end_date)]
         tx["จำนวน"] = pd.to_numeric(tx["จำนวน"], errors="coerce").fillna(0)
         tx_out = tx[tx["ประเภท"]=="OUT"]
-        tx_out_disp = ensure_branch_display(tx_out, sh=sh)
     else:
         tx_out = pd.DataFrame(columns=TXNS_HEADERS)
 
@@ -446,10 +463,10 @@ def page_dashboard(sh):
 
     if "เบิกตามสาขา (OUT)" in chart_opts:
         if not tx_out.empty:
-            tmp = tx_out_disp.groupby("สาขาแสดง", dropna=False)["จำนวน"].sum().reset_index()
-            charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", tmp, "สาขาแสดง", "จำนวน"))
+            tmp = tx_out.groupby("สาขา", dropna=False)["จำนวน"].sum().reset_index()
+            charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", tmp, "สาขา", "จำนวน"))
         else:
-            charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", pd.DataFrame({"สาขาแสดง":[], "จำนวน":[]}), "สาขา", "จำนวน"))
+            charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", pd.DataFrame({"สาขา":[], "จำนวน":[]}), "สาขา", "จำนวน"))
 
     if "เบิกตามอุปกรณ์ (OUT)" in chart_opts:
         if not tx_out.empty:
@@ -478,63 +495,33 @@ def page_dashboard(sh):
     else:
         tdf = tickets_df
 
-
-        tdf_disp = ensure_branch_display(tdf, sh=sh)
-
-        if "Ticket ตามสถานะ" in chart_opts:
-
-            if not tdf.empty:
-
-                tmp = tdf.groupby("สถานะ")["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวน"})
-
-                charts.append((f"Ticket ตามสถานะ {start_date} ถึง {end_date}", tmp, "สถานะ", "จำนวน"))
-
-            else:
-
-                charts.append((f"Ticket ตามสถานะ {start_date} ถึง {end_date}", pd.DataFrame({"สถานะ":[], "จำนวน":[]}), "สถานะ", "จำนวน"))
-
-
-        if "Ticket ตามสาขา" in chart_opts:
-
-
-            if not tdf.empty:
-
-
-                tmp = tdf_disp.groupby("สาขาแสดง", dropna=False)["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวน"})
-
-
-                charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", tmp, "สาขาแสดง", "จำนวน"))
-
-
-            else:
-
-
-                charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", pd.DataFrame({"สาขาแสดง":[], "จำนวน":[]}), "สาขาแสดง", "จำนวน"))
-
-
-
-
-
-
-        if len(charts)==0:
-
-
-
-            st.info("โปรดเลือกกราฟที่ต้องการแสดงจากด้านบน")
-
-
-
+    if "Ticket ตามสถานะ" in chart_opts:
+        if not tdf.empty:
+            tmp = tdf.groupby("สถานะ")["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวน"})
+            charts.append((f"Ticket ตามสถานะ {start_date} ถึง {end_date}", tmp, "สถานะ", "จำนวน"))
         else:
-            rows = (len(charts) + per_row - 1) // per_row
-            idx = 0
-            for r in range(rows):
-                cols = st.columns(per_row)
-                for c in range(per_row):
-                    if idx >= len(charts): break
-                    title, df, label_col, value_col = charts[idx]
-                    with cols[c]:
-                        make_pie(df, label_col, value_col, top_n, title)
-                    idx += 1
+            charts.append((f"Ticket ตามสถานะ {start_date} ถึง {end_date}", pd.DataFrame({"สถานะ":[], "จำนวน":[]}), "สถานะ", "จำนวน"))
+
+    if "Ticket ตามสาขา" in chart_opts:
+        if not tdf.empty:
+            tmp = tdf.groupby("สาขา", dropna=False)["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวน"})
+            charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", tmp, "สาขา", "จำนวน"))
+        else:
+            charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", pd.DataFrame({"สาขา":[], "จำนวน":[]}), "สาขา", "จำนวน"))
+
+    if len(charts)==0:
+        st.info("โปรดเลือกกราฟที่ต้องการแสดงจากด้านบน")
+    else:
+        rows = (len(charts) + per_row - 1) // per_row
+        idx = 0
+        for r in range(rows):
+            cols = st.columns(per_row)
+            for c in range(per_row):
+                if idx >= len(charts): break
+                title, df, label_col, value_col = charts[idx]
+                with cols[c]:
+                    make_pie(df, label_col, value_col, top_n, title)
+                idx += 1
 
     items_num = items.copy()
     if not items_num.empty:
@@ -972,8 +959,6 @@ def page_reports(sh):
             df_f = df_f[mask_q]
     else:
         df_f = pd.DataFrame(columns=TXNS_HEADERS)
-
-    df_f = ensure_branch_display(df_f, sh=sh, new_col=False)
 
     # ---------- Tickets (filtered by วันที่แจ้ง) ----------
     if not tickets.empty:
