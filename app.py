@@ -379,43 +379,111 @@ def page_issue_receive(sh):
 
     # ---------- OUT (multi rows) ----------
     with t1:
-        branch = st.selectbox("เลือกสาขาที่เบิก", options=(branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [])
-        if not branch and not branches.empty:
-            st.warning("โปรดเลือกสาขาก่อน", icon="⚠️")
-        df = items.copy()
-        df = df[["รหัส","ชื่ออุปกรณ์","คงเหลือ"]].copy()
-        df["คงเหลือ"] = pd.to_numeric(df["คงเหลือ"], errors="coerce").fillna(0).astype(int)
-        df["จำนวนที่เบิก"] = 0
-        st.caption("ระบุจำนวนที่ต้องการเบิกในคอลัมน์ 'จำนวนที่เบิก' (หลายรายการได้)")
-        ed = st.data_editor(df, use_container_width=True, num_rows="dynamic",
-                            column_config={"จำนวนที่เบิก": st.column_config.NumberColumn(min_value=0, step=1)},
-                            hide_index=True, key="out_table")
-        if st.button("บันทึกการเบิก (หลายรายการ)") and branch:
-            sel = ed[ed["จำนวนที่เบิก"].astype(int) > 0]
-            if sel.empty:
-                st.warning("ยังไม่ได้ระบุจำนวนในรายการใดเลย", icon="⚠️")
-            else:
-                txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
-                branch_code = branch.split(" | ")[0]
-                error_rows = []
-                for _, r in sel.iterrows():
-                    code_sel = r["รหัส"]; qty = int(r["จำนวนที่เบิก"]); avail = int(r["คงเหลือ"])
-                    if qty > avail:
-                        error_rows.append(code_sel); continue
-                    # update stock
-                    items.loc[items["รหัส"]==code_sel, "คงเหลือ"] = str(avail - qty)
-                    # add txn
-                    new_txn = [str(uuid.uuid4())[:8], datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"), "OUT", code_sel, r["ชื่ออุปกรณ์"], branch_code, str(qty), get_username(), ""]
-                    txns = pd.concat([txns, pd.DataFrame([new_txn], columns=TXNS_HEADERS)], ignore_index=True)
-                    record_recent("txns", new_txn, TXNS_HEADERS)
-                write_df(sh, SHEET_ITEMS, items); write_df(sh, SHEET_TXNS, txns)
-                if error_rows:
-                    st.warning("มีบางรายการสต็อกไม่พอ: " + ", ".join(error_rows), icon="⚠️")
-                st.success("บันทึกการเบิกแล้ว", icon="✅")
-                st.dataframe(st.session_state.get("recent_txns"), use_container_width=True, height=160)
+        # --- Branch first ---
+        branch_label = st.selectbox("เลือกสาขาที่เบิก", options=(branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [])
+        branch_code = branch_label.split(" | ")[0] if branch_label else ""
+        if not branch_code:
+            st.info("โปรดเลือกสาขาก่อน", icon="ℹ️")
 
-    # ---------- IN (multi rows) ----------
-    with t2:
+        # --- Draft cart kept in session ---
+        cart_key = "issue_cart"
+        if cart_key not in st.session_state:
+            st.session_state[cart_key] = []  # list of dict rows
+
+        # --- Picker row ---
+        pick_opts = []
+        for _, r in items.iterrows():
+            try:
+                remain = int(float(r["คงเหลือ"] or 0))
+            except Exception:
+                remain = 0
+            pick_opts.append(f'{r["รหัส"]} | {r["ชื่ออุปกรณ์"]} (คงเหลือ {remain})')
+
+        c1,c2,c3 = st.columns([2,1,1])
+        selected = c1.selectbox("เลือกอุปกรณ์", options=pick_opts if pick_opts else [])
+        code_sel = selected.split(" | ")[0] if selected else ""
+        row_sel = items[items["รหัส"]==code_sel].iloc[0] if code_sel else None
+        remain = int(float(row_sel["คงเหลือ"] or 0)) if row_sel is not None else 0
+        qty = c2.number_input("จำนวนที่เบิก", min_value=1, max_value=max(1, remain), value=1, step=1, help="ไม่เกินคงเหลือ")
+        add = c3.button("➕ เพิ่มรายการ", disabled=(not branch_code or not code_sel))
+
+        if add and branch_code and row_sel is not None:
+            # merge with existing row in cart
+            exists=False
+            for it in st.session_state[cart_key]:
+                if it["รหัส"]==code_sel:
+                    new_qty = it["จำนวน"] + int(qty)
+                    if new_qty > remain:
+                        st.warning(f"รายการ {code_sel} เกินคงเหลือ ({remain})", icon="⚠️")
+                    else:
+                        it["จำนวน"] = new_qty
+                        st.success("เพิ่มจำนวนในตะกร้าแล้ว", icon="✅")
+                    exists=True
+                    break
+            if not exists:
+                if int(qty) > remain:
+                    st.warning(f"เกินคงเหลือ ({remain})", icon="⚠️")
+                else:
+                    st.session_state[cart_key].append({
+                        "รหัส": code_sel,
+                        "ชื่ออุปกรณ์": row_sel["ชื่ออุปกรณ์"],
+                        "คงเหลือ": remain,
+                        "จำนวน": int(qty),
+                        "สาขา": branch_code
+                    })
+                    st.success("เพิ่มรายการแล้ว", icon="✅")
+
+        # --- Show cart table with remove checkboxes ---
+        if st.session_state[cart_key]:
+            df_cart = pd.DataFrame(st.session_state[cart_key])
+            df_cart.insert(0, "ลบ", False)
+            edited = st.data_editor(
+                df_cart, hide_index=True, use_container_width=True,
+                column_config={
+                    "ลบ": st.column_config.CheckboxColumn(required=False),
+                    "จำนวน": st.column_config.NumberColumn(min_value=1, step=1)
+                },
+                key="issue_cart_editor"
+            )
+            # sync quantities and deletions back to session
+            new_cart = []
+            for _, r in edited.iterrows():
+                if r["ลบ"]:
+                    continue
+                new_cart.append({
+                    "รหัส": r["รหัส"],
+                    "ชื่ออุปกรณ์": r["ชื่ออุปกรณ์"],
+                    "คงเหลือ": int(r["คงเหลือ"]),
+                    "จำนวน": int(r["จำนวน"]),
+                    "สาขา": r["สาขา"]
+                })
+            st.session_state[cart_key] = new_cart
+
+        # --- Commit button ---
+        if st.button("บันทึกการเบิก (หลายรายการ)", type="primary", disabled=(not st.session_state[cart_key])):
+            txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
+            errors = []
+            for it in list(st.session_state[cart_key]):  # iterate over copy
+                code_i = it["รหัส"]; qty_i = int(it["จำนวน"])
+                # check current remain fresh from items
+                cur_row = items[items["รหัส"]==code_i].iloc[0]
+                cur_remain = int(float(cur_row["คงเหลือ"] or 0))
+                if qty_i > cur_remain:
+                    errors.append(code_i); continue
+                # update stock
+                items.loc[items["รหัส"]==code_i, "คงเหลือ"] = str(cur_remain - qty_i)
+                # add txn
+                new_txn = [str(uuid.uuid4())[:8], datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"), "OUT", code_i, cur_row["ชื่ออุปกรณ์"], it["สาขา"], str(qty_i), get_username(), ""]
+                txns = pd.concat([txns, pd.DataFrame([new_txn], columns=TXNS_HEADERS)], ignore_index=True)
+                record_recent("txns", new_txn, TXNS_HEADERS)
+            write_df(sh, SHEET_ITEMS, items); write_df(sh, SHEET_TXNS, txns)
+            if errors:
+                st.warning("สต็อกไม่พอสำหรับ: " + ", ".join(errors), icon="⚠️")
+            st.success("บันทึกการเบิกแล้ว", icon="✅")
+            # clear cart after save
+            st.session_state[cart_key] = []
+            st.dataframe(st.session_state.get("recent_txns"), use_container_width=True, height=160)
+with t2:
         branch = st.selectbox("เลือกสาขาที่รับเข้า", options=(branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [], key="in_branch")
         df = items.copy()
         df = df[["รหัส","ชื่ออุปกรณ์","คงเหลือ"]].copy()
