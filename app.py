@@ -160,6 +160,37 @@ def log_event(sh, user, action, detail):
     write_df(sh, SHEET_AUDIT, df)
 
 # ---------- Utility ----------
+# ---------- Auth & Connection ----------
+def require_login():
+    if not st.session_state.get("logged_in", False):
+        with st.form("login_form"):
+            u = st.text_input("Username", value=st.session_state.get("username","admin"))
+            p = st.text_input("Password", type="password", value="")
+            s = st.form_submit_button("เข้าสู่ระบบ")
+        if s:
+            # demo: allow anything; set role admin by default
+            st.session_state["logged_in"] = True
+            st.session_state["username"] = u or "admin"
+            st.session_state["role"] = "admin"
+            safe_rerun()
+        st.stop()
+
+def connect_sheet_if_ready():
+    """Connect once and cache in session_state['sh'] after successful test/save in Settings."""
+    if st.session_state.get("sh"):  # already connected
+        return st.session_state["sh"]
+    url = st.session_state.get("sheet_url","")
+    if not url:
+        return None
+    try:
+        sh = open_sheet_by_url(url)
+        ensure_sheets_exist(sh)
+        st.session_state["sh"] = sh
+        st.session_state["connected"] = True
+        return sh
+    except Exception:
+        return None
+
 def load_config_into_session():
     """โหลดค่าคอนฟิก (เช่น sheet_url) ใส่ session_state ถ้ายังไม่มี"""
     try:
@@ -577,6 +608,8 @@ def page_settings():
     st.subheader("⚙️ Settings")
     ok = ensure_credentials_ui()
     st.text_input("Google Sheet URL", key="sheet_url", value=st.session_state.get("sheet_url",""))
+    if st.button("บันทึก URL"):
+        st.success("บันทึก URL แล้ว", icon="✅")
     c1,c2,c3 = st.columns(3)
     if c1.button("ทดสอบการเชื่อมต่อ"):
         url = st.session_state.get("sheet_url","")
@@ -586,6 +619,11 @@ def page_settings():
             ok, info = test_sheet_connection(url)
             if ok:
                 st.success("เชื่อมต่อได้ และตรวจสอบ/สร้างชีตที่จำเป็นแล้ว: " + ", ".join(info), icon="✅")
+                st.session_state["connected"]=True
+                try:
+                    st.session_state["sh"]=open_sheet_by_url(st.session_state.get("sheet_url",""))
+                except Exception:
+                    pass
                 save_config_from_session()
             else:
                 st.error("เชื่อมต่อไม่สำเร็จ: " + str(info), icon="❌")
@@ -630,24 +668,21 @@ def main():
         st.markdown("---")
         st.write("**admin**"); st.caption("Role: admin")
         if st.button("ออกจากระบบ"):
-            st.session_state.clear(); load_config_into_session(); safe_rerun()
+            for k in ["logged_in","username","role"]:
+                st.session_state.pop(k, None)
+            safe_rerun()
 
     if page == "⚙️ Settings":
+        require_login()
         page_settings(); st.caption("© 2025 IT Stock · Streamlit + Google Sheets"); return
 
     # Require sheet URL
-    sheet_url = st.session_state.get("sheet_url", "")
-    if not sheet_url:
-        st.info("ไปที่เมนู **⚙️ Settings** แล้ววาง Google Sheet URL ที่คุณเป็นเจ้าของ จากนั้นกดปุ่มทดสอบเชื่อมต่อ", icon="ℹ️")
+    require_login()
+    sh = connect_sheet_if_ready()
+    if sh is None:
+        st.info("ไปที่เมนู **⚙️ Settings** > กรอกและกด **ทดสอบการเชื่อมต่อ** เพื่อเชื่อม Google Sheet เพียงครั้งเดียว", icon="ℹ️")
         return
-    try:
-        sh = open_sheet_by_url(sheet_url)
-        ensure_sheets_exist(sh)
-    except Exception as e:
-        st.error(f"เปิดชีตไม่สำเร็จ: {e}", icon="❌"); return
 
-    # Fake login role for demo
-    if "role" not in st.session_state: st.session_state["role"] = "admin"
 
     if page=="📊 Dashboard": page_dashboard(sh)
     elif page=="📦 คลังอุปกรณ์": page_stock(sh)
