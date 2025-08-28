@@ -1418,7 +1418,7 @@ def main():
     if "sheet_url" not in st.session_state or not st.session_state.get("sheet_url"): st.session_state["sheet_url"] = DEFAULT_SHEET_URL
     with st.sidebar:
         st.markdown("---")
-        page = st.radio("เมนู", ["Dashboard","Stock","แจ้งปัญหา","เบิก/รับเข้า","รายงาน","ผู้ใช้","Settings"], index=0)
+        page = st.radio("เมนู", ["Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets)","เบิก/รับเข้า","รายงาน","ผู้ใช้","Settings"], index=0)
     if page == "Settings":
         page_settings(); st.caption("© 2025 IT Stock · Streamlit + Google Sheets"); return
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
@@ -1431,8 +1431,8 @@ def main():
     ensure_sheets_exist(sh)
     auth_block(sh)
     if page=="Dashboard": page_dashboard(sh)
-    elif page=="Stock": page_stock(sh)
-    elif page=="แจ้งปัญหา": page_tickets(sh)
+    elif page=="📦 คลังอุปกรณ์": page_stock(sh)
+    elif page=="🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets)": page_tickets(sh)
     elif page=="เบิก/รับเข้า": page_issue_receive(sh)
     elif page=="รายงาน": page_reports(sh)
     elif page=="ผู้ใช้": page_users_admin(sh)
