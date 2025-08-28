@@ -1046,141 +1046,153 @@ def _read_upload_df(file):
 
 
 
+
 def page_import(sh):
     """
-    นำเข้า/แก้ไข หมวดหมู่ (UI ใหม่: แยก 'เพิ่มทีละรายการ' และ 'นำเข้าจากไฟล์หลายรายการ')
+    นำเข้า/แก้ไข หมวดหมู่
+    - จัดเป็น 3 แท็บ: (1) เพิ่ม/แก้ไข 1 รายการ, (2) นำเข้าไฟล์หลายรายการ, (3) ค้นหา/แก้ไขแบบตาราง
     - ใช้ชีต SHEET_CATS และคอลัมน์ CATS_HEADERS = ["รหัสหมวด","ชื่อหมวด"]
     """
     st.subheader("นำเข้า/แก้ไข หมวดหมู่")
-    st.caption("เพิ่ม/อัปเดตหมวดหมู่จากแบบฟอร์ม 1 รายการ หรืออัปโหลด CSV/Excel หลายรายการ พร้อมตัวอย่างและสรุปจำนวนก่อนบันทึกจริง")
-
-    # โหลดข้อมูลเดิม
     cats = read_df(sh, SHEET_CATS, CATS_HEADERS)
 
-    # ====== SECTION A: เพิ่ม/แก้ไขทีละรายการ ======
-    st.markdown("### ✏️ เพิ่ม/แก้ไข **1 รายการ**")
-    st.write("ใส่ 'รหัสหมวด' และ 'ชื่อหมวด' ให้ครบ จากนั้นกด **บันทึก/แก้ไข 1 รายการ**")
-    with st.form("cat_single_form", clear_on_submit=True):
+    tab1, tab2, tab3 = st.tabs(["✏️ เพิ่ม/แก้ไข 1 รายการ", "📥 นำเข้าไฟล์ (หลายรายการ)", "🔎 ค้นหา/แก้ไขแบบตาราง"])
+
+    # ---------------- TAB 1: Single add/update ----------------
+    with tab1:
+        st.caption("ใส่รหัสและชื่อหมวด แล้วกดบันทึก ระบบจะ 'อัปเดต' ถ้ารหัสมีอยู่แล้ว หรือ 'เพิ่มใหม่' ถ้าไม่พบ")
         c1, c2 = st.columns([1,2])
         with c1:
-            code = st.text_input("รหัสหมวด", placeholder="เช่น PRT, KBD")
+            code = st.text_input("รหัสหมวด", placeholder="เช่น PRT, KBD").upper().strip()
         with c2:
-            name = st.text_input("ชื่อหมวด", placeholder="เช่น หมึกพิมพ์, คีย์บอร์ด")
-        s1 = st.form_submit_button("💾 บันทึก/แก้ไข 1 รายการ", use_container_width=True)
-    if s1:
-        code = (code or "").strip().upper()
-        name = (name or "").strip()
-        if not code or not name:
-            st.warning("กรุณากรอกรหัสและชื่อหมวดให้ครบ")
-        else:
-            df = read_df(sh, SHEET_CATS, CATS_HEADERS)
-            if (df["รหัสหมวด"] == code).any():
-                df.loc[df["รหัสหมวด"] == code, "ชื่อหมวด"] = name
-                action = "อัปเดต"
+            name = st.text_input("ชื่อหมวด", placeholder="เช่น หมึกพิมพ์, คีย์บอร์ด").strip()
+        if st.button("💾 บันทึก/แก้ไข 1 รายการ", use_container_width=True, key="save_single"):
+            if not code or not name:
+                st.warning("กรุณากรอกรหัสและชื่อหมวดให้ครบ")
             else:
-                df = pd.concat([df, pd.DataFrame([[code, name]], columns=CATS_HEADERS)], ignore_index=True)
-                action = "เพิ่มใหม่"
-            write_df(sh, SHEET_CATS, df)
-            st.success(f"{action}เรียบร้อย: {code} — {name}")
-            safe_rerun()
+                df = read_df(sh, SHEET_CATS, CATS_HEADERS)
+                if (df["รหัสหมวด"] == code).any():
+                    df.loc[df["รหัสหมวด"] == code, "ชื่อหมวด"] = name
+                    msg = "อัปเดต"
+                else:
+                    df = pd.concat([df, pd.DataFrame([[code, name]], columns=CATS_HEADERS)], ignore_index=True)
+                    msg = "เพิ่มใหม่"
+                write_df(sh, SHEET_CATS, df)
+                st.success(f"{msg}เรียบร้อย: {code} — {name}")
+                safe_rerun()
 
-    st.markdown("---")
-
-    # ====== SECTION B: นำเข้าจากไฟล์หลายรายการ ======
-    st.markdown("### 📥 นำเข้า **หลายรายการ** (CSV/Excel)")
-    with st.expander("วิธีใช้งาน/เทมเพลต (คลิกเพื่อดู)", expanded=False):
-        st.markdown("""\
+    # ---------------- TAB 2: Import many ----------------
+    with tab2:
+        with st.expander("วิธีใช้งาน/เทมเพลต (คลิกเพื่อดู)", expanded=False):
+            st.markdown("""\
 - รองรับไฟล์ .csv หรือ .xlsx ที่มีคอลัมน์ **รหัสหมวด, ชื่อหมวด**
 - ระบบจะ **อัปเดตชื่อหมวด** หากพบรหัสซ้ำ และ **เพิ่มใหม่** เมื่อไม่พบรหัสเดิม
 - ไม่ลบรายการเดิมโดยอัตโนมัติ เว้นแต่เลือกโหมด 'แทนที่ทั้งชีต'
-        """)
-        tpl = """รหัสหมวด,ชื่อหมวด
+            """)
+            tpl = """รหัสหมวด,ชื่อหมวด
 PRT,หมึกพิมพ์
 KBD,คีย์บอร์ด
 """
-        st.download_button("ดาวน์โหลดเทมเพลต (CSV)", data=tpl.encode("utf-8-sig"),
-                           file_name="template_categories.csv", mime="text/csv")
+            st.download_button("ดาวน์โหลดเทมเพลต (CSV)", data=tpl.encode("utf-8-sig"),
+                               file_name="template_categories.csv", mime="text/csv")
 
-    cA, cB = st.columns([2,1])
-    with cA:
-        up = st.file_uploader("เลือกไฟล์ (.csv, .xlsx)", type=["csv","xlsx","xls"], key="cat_uploader")
-    with cB:
-        replace_all = st.checkbox("แทนที่ทั้งชีต (ล้างและใส่ใหม่)", value=False,
-                                  help="ถ้าเปิด: จะลบข้อมูลเดิมทั้งหมดและใช้เฉพาะข้อมูลจากไฟล์")
+        cA, cB = st.columns([2,1])
+        with cA:
+            up = st.file_uploader("เลือกไฟล์ (.csv, .xlsx)", type=["csv","xlsx","xls"], key="cat_uploader_v2")
+        with cB:
+            replace_all = st.checkbox("แทนที่ทั้งชีต (ล้างและใส่ใหม่)", value=False)
 
-    if up is not None:
-        # อ่านไฟล์อัปโหลด
-        try:
-            if up.name.lower().endswith(".csv"):
-                df_up = pd.read_csv(up, dtype=str)
-            else:
-                df_up = pd.read_excel(up, dtype=str)
-            df_up = df_up.fillna("").applymap(lambda x: str(x).strip())
-        except Exception as e:
-            st.error(f"อ่านไฟล์ไม่สำเร็จ: {e}")
-            return
+        if up is not None:
+            try:
+                if up.name.lower().endswith(".csv"):
+                    df_up = pd.read_csv(up, dtype=str)
+                else:
+                    df_up = pd.read_excel(up, dtype=str)
+                df_up = df_up.fillna("").applymap(lambda x: str(x).strip())
+            except Exception as e:
+                st.error(f"อ่านไฟล์ไม่สำเร็จ: {e}")
+                return
 
-        # ทำให้ชื่อคอลัมน์มาตรฐาน
-        rename_map = {
-            "รหัสหมวดหมู่":"รหัสหมวด", "ชื่อหมวดหมู่":"ชื่อหมวด",
-            "code":"รหัสหมวด", "name":"ชื่อหมวด", "category_code":"รหัสหมวด", "category_name":"ชื่อหมวด"
-        }
-        df_up.columns = [rename_map.get(c.strip(), c.strip()) for c in df_up.columns]
+            rename_map = {"รหัสหมวดหมู่":"รหัสหมวด","ชื่อหมวดหมู่":"ชื่อหมวด","code":"รหัสหมวด","name":"ชื่อหมวด","category_code":"รหัสหมวด","category_name":"ชื่อหมวด"}
+            df_up.columns = [rename_map.get(c.strip(), c.strip()) for c in df_up.columns]
+            missing = [c for c in ["รหัสหมวด","ชื่อหมวด"] if c not in df_up.columns]
+            if missing:
+                st.error(f"ไฟล์ขาดคอลัมน์ที่บังคับ: {', '.join(missing)}"); return
 
-        # ตรวจคอลัมน์บังคับ
-        missing_cols = [c for c in ["รหัสหมวด","ชื่อหมวด"] if c not in df_up.columns]
-        if missing_cols:
-            st.error(f"ไฟล์ขาดคอลัมน์ที่บังคับ: {', '.join(missing_cols)}")
-            return
+            df_up["รหัสหมวด"] = df_up["รหัสหมวด"].str.upper()
+            df_up = df_up[df_up["รหัสหมวด"]!=""]
+            df_up = df_up.drop_duplicates(subset=["รหัสหมวด"], keep="last")
 
-        # ทำความสะอาด
-        df_up["รหัสหมวด"] = df_up["รหัสหมวด"].str.upper()
-        df_up = df_up[df_up["รหัสหมวด"] != ""]
-        df_up = df_up.drop_duplicates(subset=["รหัสหมวด"], keep="last")
+            st.success(f"พรีวิว {len(df_up):,} รายการ")
+            st.dataframe(df_up, use_container_width=True, height=240)
 
-        # พรีวิว + สรุปจำนวน
-        st.success(f"พบข้อมูลสำหรับนำเข้า {len(df_up):,} รายการ")
-        st.dataframe(df_up, use_container_width=True, height=220)
+            if st.button("🚀 ดำเนินการนำเข้า/อัปเดต", use_container_width=True, key="do_import"):
+                base = read_df(sh, SHEET_CATS, CATS_HEADERS)
+                if replace_all:
+                    write_df(sh, SHEET_CATS, df_up[CATS_HEADERS])
+                    st.success(f"แทนที่ทั้งชีตสำเร็จ • บันทึก {len(df_up):,} รายการ"); safe_rerun()
+                else:
+                    added, updated = 0, 0
+                    for _, r in df_up.iterrows():
+                        code, name = str(r["รหัสหมวด"]).strip().upper(), str(r["ชื่อหมวด"]).strip()
+                        if not code or not name: 
+                            continue
+                        if (base["รหัสหมวด"] == code).any():
+                            base.loc[base["รหัสหมวด"] == code, "ชื่อหมวด"] = name; updated += 1
+                        else:
+                            base = pd.concat([base, pd.DataFrame([[code, name]], columns=CATS_HEADERS)], ignore_index=True); added += 1
+                    write_df(sh, SHEET_CATS, base)
+                    st.success(f"นำเข้าสำเร็จ • เพิ่มใหม่ {added:,} • อัปเดต {updated:,}"); safe_rerun()
 
-        if st.button("🚀 ดำเนินการนำเข้า/อัปเดต", use_container_width=True):
-            base = read_df(sh, SHEET_CATS, CATS_HEADERS)
-            if replace_all:
-                final = df_up[CATS_HEADERS].copy()
-                write_df(sh, SHEET_CATS, final)
-                st.success(f"แทนที่ทั้งชีตสำเร็จ • บันทึก {len(final):,} รายการ")
-                safe_rerun()
-            else:
-                base_idx = {r["รหัสหมวด"]: i for i, r in base.reset_index().iterrows()}
-                added, updated = 0, 0
-                for _, r in df_up.iterrows():
-                    code, name = str(r["รหัสหมวด"]).strip().upper(), str(r["ชื่อหมวด"]).strip()
-                    if not code or not name: 
-                        continue
-                    if code in base_idx:
-                        base.loc[base["รหัสหมวด"] == code, "ชื่อหมวด"] = name
-                        updated += 1
-                    else:
-                        base = pd.concat([base, pd.DataFrame([[code, name]], columns=CATS_HEADERS)], ignore_index=True)
-                        added += 1
+    # ---------------- TAB 3: Search & inline edit ----------------
+    with tab3:
+        c1, c2 = st.columns([2,1])
+        with c1:
+            q = st.text_input("ค้นหา (รหัส/ชื่อ)", key="cat_search_v2")
+        with c2:
+            st.caption("โหมดตารางสามารถแก้ไขค่าได้ แล้วกดบันทึกด้านล่าง")
+
+        view = cats.copy()
+        if not view.empty and q:
+            mask = view["รหัสหมวด"].str.contains(q, case=False, na=False) | view["ชื่อหมวด"].str.contains(q, case=False, na=False)
+            view = view[mask]
+
+        # เปิดแก้ไขเฉพาะคอลัมน์ 'ชื่อหมวด' เพื่อกันรหัสเปลี่ยนโดยไม่ตั้งใจ
+        edited = st.data_editor(
+            view.sort_values("รหัสหมวด"),
+            use_container_width=True,
+            height=360,
+            disabled=["รหัสหมวด"],
+            key="cat_editor"
+        )
+
+        cL, cR = st.columns([1,1])
+        with cL:
+            if st.button("💾 บันทึกการแก้ไขในตาราง", use_container_width=True, key="save_table"):
+                base = read_df(sh, SHEET_CATS, CATS_HEADERS)
+                # sync: update name for matching codes; ignore codesที่ไม่มีในฐาน
+                for _, r in edited.iterrows():
+                    base.loc[base["รหัสหมวด"] == str(r["รหัสหมวด"]).strip().upper(), "ชื่อหมวด"] = str(r["ชื่อหมวด"]).strip()
                 write_df(sh, SHEET_CATS, base)
-                st.success(f"นำเข้าสำเร็จ • เพิ่มใหม่ {added:,} • อัปเดต {updated:,}")
+                st.success("บันทึกการแก้ไขเรียบร้อย")
                 safe_rerun()
+        with cR:
+            # เพิ่มรายการใหม่แบบฟอร์มเล็กที่แท็บนี้
+            with st.popover("➕ เพิ่มใหม่อย่างเร็ว"):
+                code2 = st.text_input("รหัสหมวด (ใหม่)", key="quick_code").upper().strip()
+                name2 = st.text_input("ชื่อหมวด", key="quick_name").strip()
+                if st.button("เพิ่ม", key="quick_add"):
+                    if not code2 or not name2:
+                        st.warning("กรุณากรอกให้ครบ")
+                    else:
+                        base = read_df(sh, SHEET_CATS, CATS_HEADERS)
+                        if (base["รหัสหมวด"] == code2).any():
+                            st.error("รหัสนี้มีอยู่แล้ว"); st.stop()
+                        base = pd.concat([base, pd.DataFrame([[code2, name2]], columns=CATS_HEADERS)], ignore_index=True)
+                        write_df(sh, SHEET_CATS, base)
+                        st.success("เพิ่มใหม่แล้ว")
+                        safe_rerun()
 
-    st.markdown("---")
-
-    # ====== SECTION C: ตารางแสดงผล + ค้นหา/ส่งออก ======
-    st.markdown("### 📋 หมวดหมู่ทั้งหมด")
-    q = st.text_input("ค้นหา (รหัส/ชื่อ)", key="cat_search")
-    view = cats.copy()
-    if not view.empty and q:
-        mask = view["รหัสหมวด"].str.contains(q, case=False, na=False) | view["ชื่อหมวด"].str.contains(q, case=False, na=False)
-        view = view[mask]
-    st.dataframe(view.sort_values("รหัสหมวด") if not view.empty else view, use_container_width=True, height=260)
-
-    # ส่งออก CSV
-    if not view.empty:
-        csv_bytes = view.to_csv(index=False).encode("utf-8-sig")
-        st.download_button("⬇️ ดาวน์โหลด CSV (ข้อมูลที่แสดง)", data=csv_bytes, file_name="categories_export.csv", mime="text/csv")
 
 def main():
     st.set_page_config(page_title=APP_TITLE, page_icon="🧰", layout="wide"); st.markdown(MINIMAL_CSS, unsafe_allow_html=True)
