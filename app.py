@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 IT Stock (Streamlit + Google Sheets)
@@ -624,96 +623,65 @@ def page_tickets(sh):
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+
 def page_stock(sh):
-    st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("📦 คลังอุปกรณ์")
-    items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS); cats  = read_df(sh, SHEET_CATS, CATS_HEADERS)
-    q = st.text_input("ค้นหา (รหัส/ชื่อ/หมวด)")
-    view_df = items.copy()
-    if q and not items.empty:
-        mask = items["รหัส"].str.contains(q, case=False, na=False) | items["ชื่ออุปกรณ์"].str.contains(q, case=False, na=False) | items["หมวดหมู่"].str.contains(q, case=False, na=False)
-        view_df = items[mask]
-    st.dataframe(view_df, use_container_width=True, height=320)
+    add_reload_button()
+    st.subheader("📦 คลังอุปกรณ์")
 
-    unit_opts = get_unit_options(items)
-    loc_opts  = get_loc_options(items)
+    import pandas as pd
+    df = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
 
-    if st.session_state.get("role") in ("admin","staff"):
-        t_add, t_edit = st.tabs(["➕ เพิ่ม/อัปเดต (รหัสใหม่)","✏️ แก้ไข/ลบ (เลือกรายการเดิม)"])
+    q = st.text_input("ค้นหา (รหัส/ชื่อ/หมวด)", "")
+    if q.strip():
+        ql = q.strip().lower()
+        df = df[df.apply(lambda r: ql in str(r["รหัส"]).lower()
+                                   or ql in str(r["ชื่ออุปกรณ์"]).lower()
+                                   or ql in str(r["รหัสหมวด"]).lower(), axis=1)]
 
-        with t_add:
-            with st.form("item_add", clear_on_submit=True):
-                c1,c2,c3 = st.columns(3)
-                with c1:
-                    if cats.empty: st.info("ยังไม่มีหมวดหมู่ในชีต Categories (ใช้เมนู นำเข้า/แก้ไข หมวดหมู่ เพื่อเพิ่ม)"); cat_opt=""
-                    else:
-                        opts = (cats["รหัสหมวด"]+" | "+cats["ชื่อหมวด"]).tolist(); selected = st.selectbox("หมวดหมู่", options=opts)
-                        cat_opt = selected.split(" | ")[0]
-                    name = st.text_input("ชื่ออุปกรณ์")
-                with c2:
-                    sel_unit = st.selectbox("หน่วย (เลือกจากรายการ)", options=unit_opts, index=0)
-                    unit = st.text_input("ระบุหน่วยใหม่", value="", disabled=(sel_unit!="พิมพ์เอง"))
-                    if sel_unit!="พิมพ์เอง": unit = sel_unit
-                    qty = st.number_input("คงเหลือ", min_value=0, value=0, step=1)
-                    rop = st.number_input("จุดสั่งซื้อ", min_value=0, value=0, step=1)
-                with c3:
-                    sel_loc = st.selectbox("ที่เก็บ (เลือกจากรายการ)", options=loc_opts, index=0)
-                    loc = st.text_input("ระบุที่เก็บใหม่", value="", disabled=(sel_loc!="พิมพ์เอง"))
-                    if sel_loc!="พิมพ์เอง": loc = sel_loc
-                    active = st.selectbox("ใช้งาน", ["Y","N"], index=0)
-                    auto_code = st.checkbox("สร้างรหัสอัตโนมัติ", value=True)
-                    code = st.text_input("รหัสอุปกรณ์ (ถ้าไม่ออโต้)", disabled=auto_code)
-                    s_add = st.form_submit_button("บันทึก/อัปเดต", use_container_width=True)
-            if s_add:
-                if (auto_code and not cat_opt) or (not auto_code and code.strip()==""): st.error("กรุณาเลือกหมวด/ระบุรหัส")
-                else:
-                    items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS); gen_code = generate_item_code(sh, cat_opt) if auto_code else code.strip().upper()
-                    if (items["รหัส"]==gen_code).any():
-                        items.loc[items["รหัส"]==gen_code, ITEMS_HEADERS] = [gen_code, cat_opt, name, unit, qty, rop, loc, active]
-                    else:
-                        items = pd.concat([items, pd.DataFrame([[gen_code, cat_opt, name, unit, qty, rop, loc, active]], columns=ITEMS_HEADERS)], ignore_index=True)
-                    write_df(sh, SHEET_ITEMS, items); st.success(f"บันทึกเรียบร้อย (รหัส: {gen_code})"); safe_rerun()
+    df_show = df.copy()
+    if "เลือก" not in df_show.columns:
+        df_show.insert(0, "เลือก", False)
 
-        with t_edit:
-            st.caption("เลือก 'รหัสอุปกรณ์' เพื่อโหลดขึ้นมาปรับแก้ หรือกดลบ")
-            if items.empty:
-                st.info("ยังไม่มีรายการให้แก้ไข")
-            else:
-                codes = items["รหัส"].tolist()
-                pick = st.selectbox("เลือกรหัสอุปกรณ์", options=["-- เลือก --"]+codes)
-                if pick != "-- เลือก --":
-                    row = items[items["รหัส"]==pick].iloc[0]
-                    unit_opts_edit = unit_opts[:-1]
-                    if row["หน่วย"] not in unit_opts_edit and str(row["หน่วย"]).strip()!="":
-                        unit_opts_edit = [row["หน่วย"]] + unit_opts_edit
-                    unit_opts_edit = unit_opts_edit + ["พิมพ์เอง"]
-                    loc_opts_edit = loc_opts[:-1]
-                    if row["ที่เก็บ"] not in loc_opts_edit and str(row["ที่เก็บ"]).strip()!="":
-                        loc_opts_edit = [row["ที่เก็บ"]] + loc_opts_edit
-                    loc_opts_edit = loc_opts_edit + ["พิมพ์เอง"]
+    st.caption("ติ๊กเลือก 1 แถวจากตารางเพื่อแก้ไขรายละเอียดด้านล่าง")
+    edited_table = st.data_editor(
+        df_show,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        column_config={
+            "เลือก": st.column_config.CheckboxColumn(help="เลือก 1 แถวเพื่อแก้ไขด้านล่าง"),
+            "รหัส": st.column_config.TextColumn(disabled=True),
+        },
+        disabled=[c for c in df_show.columns if c not in ["เลือก"]],
+        key="items_picker",
+    )
 
-                    with st.form("item_edit", clear_on_submit=False):
-                        c1,c2,c3 = st.columns(3)
-                        with c1:
-                            name = st.text_input("ชื่ออุปกรณ์", value=row["ชื่ออุปกรณ์"])
-                            sel_unit = st.selectbox("หน่วย (เลือกจากรายการ)", options=unit_opts_edit, index=0)
-                            unit = st.text_input("ระบุหน่วยใหม่", value="", disabled=(sel_unit!="พิมพ์เอง"))
-                            if sel_unit!="พิมพ์เอง": unit = sel_unit
-                        with c2:
-                            qty = st.number_input("คงเหลือ", min_value=0, value=int(float(row["คงเหลือ"]) if str(row["คงเหลือ"]).strip()!="" else 0), step=1)
-                            rop = st.number_input("จุดสั่งซื้อ", min_value=0, value=int(float(row["จุดสั่งซื้อ"]) if str(row["จุดสั่งซื้อ"]).strip()!="" else 0), step=1)
-                        with c3:
-                            sel_loc = st.selectbox("ที่เก็บ (เลือกจากรายการ)", options=loc_opts_edit, index=0)
-                            loc = st.text_input("ระบุที่เก็บใหม่", value="", disabled=(sel_loc!="พิมพ์เอง"))
-                            if sel_loc!="พิมพ์เอง": loc = sel_loc
-                            active = st.selectbox("ใช้งาน", ["Y","N"], index=0 if str(row["ใช้งาน"]).upper()=="Y" else 1)
-                        col_save, col_delete = st.columns([3,1])
-                        s_save = col_save.form_submit_button("💾 บันทึกการแก้ไข", use_container_width=True)
-                        s_del  = col_delete.form_submit_button("🗑️ ลบรายการ", use_container_width=True)
-                    if s_save:
-                        items.loc[items["รหัส"]==pick, ITEMS_HEADERS] = [pick, row["หมวดหมู่"], name, unit, qty, rop, loc, "Y" if active=="Y" else "N"]
-                        write_df(sh, SHEET_ITEMS, items); st.success("อัปเดตแล้ว"); safe_rerun()
-                    if s_del:
-                        items = items[items["รหัส"]!=pick]; write_df(sh, SHEET_ITEMS, items); st.success(f"ลบ {pick} แล้ว"); safe_rerun()
+    selected = edited_table[edited_table["เลือก"] == True]
+    if len(selected) != 1:
+        st.info("เลือก 1 แถวจากตารางด้านบนเพื่อแก้ไขรายละเอียด", icon="ℹ️")
+        return
+
+    row = selected.iloc[0]
+    st.markdown("### ✏️ แก้ไขอุปกรณ์")
+
+    col1, col2 = st.columns(2)
+    code_id = col1.text_input("รหัส", value=row["รหัส"], disabled=True)
+    cat  = col2.text_input("รหัสหมวด", value=row["รหัสหมวด"])
+    name = st.text_input("ชื่ออุปกรณ์", value=row["ชื่ออุปกรณ์"])
+    unit = st.text_input("หน่วย", value=row["หน่วย"])
+    bal  = st.number_input("คงเหลือ", min_value=0, step=1, value=int(pd.to_numeric(row["คงเหลือ"], errors="coerce") or 0))
+    rop  = st.number_input("จุดสั่งซื้อ", min_value=0, step=1, value=int(pd.to_numeric(row["จุดสั่งซื้อ"], errors="coerce") or 0))
+    loc  = st.text_input("ที่เก็บ", value=row["ที่เก็บ"])
+    use  = st.selectbox("ใช้งาน", ["Y","N"], index=0 if str(row["ใช้งาน"]).upper()=="Y" else 1)
+
+    if st.button("บันทึกการแก้ไข", type="primary"):
+        df2 = df.copy()
+        df2.loc[df2["รหัส"] == code_id, ["รหัสหมวด","ชื่ออุปกรณ์","หน่วย","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ","ใช้งาน"]] = \
+            [cat, name, unit, str(bal), str(rop), loc, use]
+        write_df(sh, SHEET_ITEMS, df2.astype(str))
+        st.success("บันทึกการแก้ไขเรียบร้อย", icon="✅")
+        st.rerun()
+
 
 def group_period(df, period="ME"):
     dfx = df.copy(); dfx["วันเวลา"] = pd.to_datetime(dfx["วันเวลา"], errors='coerce'); dfx = dfx.dropna(subset=["วันเวลา"])
@@ -722,21 +690,19 @@ def group_period(df, period="ME"):
 
 def page_issue_out_multi5(sh):
     """เบิก (OUT): เลือกสาขาก่อน แล้วกรอกได้ 5 รายการในครั้งเดียว"""
-    import pandas as pd
+    import pandas as pd, uuid
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
     branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
 
     if items.empty:
         st.info("ยังไม่มีรายการอุปกรณ์", icon="ℹ️"); return
 
-    # 1) เลือกสาขา/หน่วยงานผู้ขอ (อยู่บรรทัดบนสุด)
     bopt = st.selectbox("สาขา/หน่วยงานผู้ขอ", options=(branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [])
     branch_code = bopt.split(" | ")[0] if bopt else ""
 
     st.write("")
     st.markdown("**เลือกรายการที่ต้องการเบิก (ได้สูงสุด 5 รายการต่อครั้ง)**")
 
-    # เตรียม options แสดงคงเหลือ
     opts = []
     for _, r in items.iterrows():
         remain = int(pd.to_numeric(r["คงเหลือ"], errors="coerce") or 0)
@@ -1495,8 +1461,8 @@ def main():
     if "sheet_url" not in st.session_state or not st.session_state.get("sheet_url"): st.session_state["sheet_url"] = DEFAULT_SHEET_URL
     with st.sidebar:
         st.markdown("---")
-        page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
-    if "Settings" in page:
+        page = st.radio("เมนู", ["Dashboard","Stock","แจ้งปัญหา","เบิก/รับเข้า","รายงาน","ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","Settings"], index=0)
+    if page == "Settings":
         page_settings(); st.caption("© 2025 IT Stock · Streamlit + Google Sheets"); return
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
     if not sheet_url:
@@ -1507,13 +1473,13 @@ def main():
         st.error(f"เปิดชีตไม่สำเร็จ: {e}"); return
     ensure_sheets_exist(sh)
     auth_block(sh)
-    if page.startswith("📊"): page_dashboard(sh)
-    elif page.startswith("📦"): page_stock(sh)
-    elif page.startswith("🛠️"): page_tickets(sh)
-    elif page.startswith("🧾"): page_issue_receive(sh)
-    elif page.startswith("📑"): page_reports(sh)
-    elif page.startswith("👤") or page.startswith("👥"): page_users_admin(sh)
-    elif page.startswith("นำเข้า") or page.startswith("🗂️"): page_import(sh)
+    if page=="Dashboard": page_dashboard(sh)
+    elif page=="Stock": page_stock(sh)
+    elif page=="แจ้งปัญหา": page_tickets(sh)
+    elif page=="เบิก/รับเข้า": page_issue_receive(sh)
+    elif page=="รายงาน": page_reports(sh)
+    elif page=="ผู้ใช้": page_users_admin(sh)
+    elif page=="นำเข้า/แก้ไข หมวดหมู่": page_import(sh)
     st.caption("© 2025 IT Stock · Streamlit + Google Sheets")
 
 if __name__ == "__main__":
