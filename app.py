@@ -297,6 +297,7 @@ def page_dashboard(sh):
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
     txns  = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
     tickets = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
+    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
 
     total_items = len(items)
     low_rop = 0
@@ -310,6 +311,41 @@ def page_dashboard(sh):
     st.metric("จำนวนอุปกรณ์", f"{total_items:,}")
     st.metric("ต่ำกว่า ROP", f"{low_rop:,}")
     st.metric("Tickets ทั้งหมด", f"{len(tickets):,}")
+    # Top branches by OUT (30 days)
+    with c3:
+        st.markdown("**TOP 5 สาขาที่เบิกมากสุด (30 วัน)**")
+        if txns.empty:
+            st.info("ยังไม่มีธุรกรรม", icon="ℹ️")
+        else:
+            try:
+                df = txns.copy()
+                df["วันเวลา"] = pd.to_datetime(df["วันเวลา"], errors="coerce")
+                df = df.dropna(subset=["วันเวลา"])
+                cutoff = pd.Timestamp.utcnow().tz_localize("UTC").tz_convert(TZ) - pd.Timedelta(days=30)
+                df = df[(df["วันเวลา"] >= cutoff) & (df["ประเภท"]=="OUT")]
+                df["จำนวน"] = pd.to_numeric(df["จำนวน"], errors="coerce").fillna(0)
+                top = df.groupby("สาขา")["จำนวน"].sum().sort_values(ascending=False).head(5)
+                st.bar_chart(top)
+            except Exception:
+                st.info("ไม่สามารถสร้างกราฟได้จากข้อมูลปัจจุบัน", icon="ℹ️")
+
+    # Top branches by Tickets (30 days)
+    with c4:
+        st.markdown("**TOP 5 สาขาที่แจ้งซ่อมมากสุด (30 วัน)**")
+        if tickets.empty:
+            st.info("ยังไม่มี Tickets", icon="ℹ️")
+        else:
+            try:
+                tv = tickets.copy()
+                tv["วันที่แจ้ง"] = pd.to_datetime(tv["วันที่แจ้ง"], errors="coerce")
+                tv = tv.dropna(subset=["วันที่แจ้ง"])
+                cutoff = pd.Timestamp.utcnow().tz_localize("UTC").tz_convert(TZ) - pd.Timedelta(days=30)
+                tv = tv[tv["วันที่แจ้ง"] >= cutoff]
+                cnt = tv.groupby("สาขา")["TicketID"].count().sort_values(ascending=False).head(5)
+                st.bar_chart(cnt)
+            except Exception:
+                st.info("ไม่สามารถสร้างกราฟได้จากข้อมูลปัจจุบัน", icon="ℹ️")
+
     st.markdown("</div>", unsafe_allow_html=True)
 
     # ---------- Charts ----------
@@ -524,15 +560,24 @@ def page_stock(sh):
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+
 def page_issue_receive(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("📥 เบิก/รับเข้า")
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
-    if items.empty: st.info("ยังไม่มีรายการอุปกรณ์ในคลัง", icon="ℹ️"); st.markdown("</div>", unsafe_allow_html=True); return
+    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
+    if items.empty: 
+        st.info("ยังไม่มีรายการอุปกรณ์ในคลัง", icon="ℹ️"); 
+        st.markdown("</div>", unsafe_allow_html=True); 
+        return
+    if branches.empty:
+        st.warning("ยังไม่มีข้อมูลสาขา (ไปที่ชีต Branches เพื่อเพิ่ม)", icon="⚠️")
+
     t1,t2 = st.tabs(["เบิก (OUT)","รับเข้า (IN)"])
 
     with t1:
         with st.form("issue", clear_on_submit=True):
             pick = st.selectbox("เลือกรายการ", options=(items["รหัส"]+" | "+items["ชื่ออุปกรณ์"]).tolist())
+            bopt = st.selectbox("เลือกสาขาที่เบิก", options=(branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [])
             qty = st.number_input("จำนวนที่เบิก", min_value=1, value=1, step=1)
             by = st.text_input("ผู้ดำเนินการ", value=get_username())
             note = st.text_input("หมายเหตุ", value="")
@@ -547,13 +592,19 @@ def page_issue_receive(sh):
                 items.loc[items["รหัส"]==code_sel, "คงเหลือ"] = str(cur - qty)
                 write_df(sh, SHEET_ITEMS, items)
                 txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
-                txns = pd.concat([txns, pd.DataFrame([[str(uuid.uuid4())[:8], datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"), "OUT", code_sel, row["ชื่ออุปกรณ์"], "", str(qty), by, note]], columns=TXNS_HEADERS)], ignore_index=True)
-                write_df(sh, SHEET_TXNS, txns); log_event(sh, get_username(), "ISSUE", f"{code_sel} x {qty}")
+                branch_code = bopt.split(" | ")[0] if bopt else ""
+                txns = pd.concat([txns, pd.DataFrame([[
+                    str(uuid.uuid4())[:8],
+                    datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"),
+                    "OUT", code_sel, row["ชื่ออุปกรณ์"], branch_code, str(qty), by, note
+                ]], columns=TXNS_HEADERS)], ignore_index=True)
+                write_df(sh, SHEET_TXNS, txns); log_event(sh, get_username(), "ISSUE", f"{code_sel} x {qty} @ {branch_code}")
                 st.success("บันทึกแล้ว", icon="✅")
 
     with t2:
         with st.form("receive", clear_on_submit=True):
             pick = st.selectbox("เลือกรายการ", options=(items["รหัส"]+" | "+items["ชื่ออุปกรณ์"]).tolist(), key="recvpick")
+            bopt = st.selectbox("เลือกสาขาที่รับเข้า", options=(branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [], key="recvbranch")
             qty = st.number_input("จำนวนที่รับเข้า", min_value=1, value=1, step=1, key="recvqty")
             by = st.text_input("ผู้ดำเนินการ", value=get_username(), key="recvby")
             note = st.text_input("หมายเหตุ", value="", key="recvnote")
@@ -565,8 +616,13 @@ def page_issue_receive(sh):
             items.loc[items["รหัส"]==code_sel, "คงเหลือ"] = str(cur + qty)
             write_df(sh, SHEET_ITEMS, items)
             txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
-            txns = pd.concat([txns, pd.DataFrame([[str(uuid.uuid4())[:8], datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"), "IN", code_sel, row["ชื่ออุปกรณ์"], "", str(qty), by, note]], columns=TXNS_HEADERS)], ignore_index=True)
-            write_df(sh, SHEET_TXNS, txns); log_event(sh, get_username(), "RECEIVE", f"{code_sel} x {qty}")
+            branch_code = bopt.split(" | ")[0] if bopt else ""
+            txns = pd.concat([txns, pd.DataFrame([[
+                str(uuid.uuid4())[:8],
+                datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"),
+                "IN", code_sel, row["ชื่ออุปกรณ์"], branch_code, str(qty), by, note
+            ]], columns=TXNS_HEADERS)], ignore_index=True)
+            write_df(sh, SHEET_TXNS, txns); log_event(sh, get_username(), "RECEIVE", f"{code_sel} x {qty} @ {branch_code}")
             st.success("บันทึกแล้ว", icon="✅")
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -576,6 +632,7 @@ def page_tickets(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets)")
     cats = read_df(sh, SHEET_TICKET_CATS, TICKET_CAT_HEADERS)
     tickets = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
+    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
 
     # tabs: สร้าง/รายการ/หมวดหมู่ปัญหา (สำหรับ admin/staff)
     if st.session_state.get("role","admin") in ("admin","staff"):
@@ -586,6 +643,7 @@ def page_tickets(sh):
 
     with tab1:
         with st.form("tick_new", clear_on_submit=True):
+            bopt = st.selectbox("เลือกสาขาที่แจ้ง", options=(branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [])
             cat = st.selectbox("หมวดหมู่ปัญหา", options=(cats["รหัสหมวดปัญหา"]+" | "+cats["ชื่อหมวดปัญหา"]).tolist() if not cats.empty else [])
             who = st.text_input("ผู้แจ้ง", value=get_username())
             detail = st.text_area("รายละเอียด")
@@ -595,7 +653,7 @@ def page_tickets(sh):
             tid = "T" + datetime.now(TZ).strftime("%y%m%d%H%M%S")
             now = datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
             catname = cat.split(" | ")[1] if cat else ""
-            row = [tid, now, "", who, catname, detail, "เปิด", "", now, ""]
+            row = [tid, now, (bopt.split(" | ")[0] if bopt else ""), who, catname, detail, "เปิด", "", now, ""]
             df = pd.concat([df, pd.DataFrame([row], columns=TICKETS_HEADERS)], ignore_index=True)
             write_df(sh, SHEET_TICKETS, df); log_event(sh, get_username(), "TICKET_NEW", tid)
             st.success("สร้าง Ticket แล้ว", icon="✅")
@@ -657,10 +715,13 @@ def page_tickets(sh):
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+
 def page_reports(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("📑 รายงาน")
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
     txns  = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
+    tickets = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
+    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
 
     st.markdown("### รายงานสินค้าต่ำกว่า ROP")
     low = pd.DataFrame(columns=ITEMS_HEADERS)
@@ -678,6 +739,7 @@ def page_reports(sh):
     c1,c2 = st.columns(2)
     since = c1.date_input("ตั้งแต่", value=date.today()-timedelta(days=30))
     until = c2.date_input("ถึง", value=date.today())
+
     view = txns.copy()
     if not view.empty:
         try:
@@ -688,6 +750,47 @@ def page_reports(sh):
     st.dataframe(view, use_container_width=True, height=260)
     if not view.empty:
         st.download_button("ดาวน์โหลด CSV (ธุรกรรม)", data=view.to_csv(index=False).encode("utf-8-sig"), file_name="transactions.csv", mime="text/csv")
+
+    # --- New: Pivot การเบิกตามสาขา/อุปกรณ์ ---
+    st.markdown("### สรุปการเบิกตามสาขาและอุปกรณ์ (ช่วงเวลาที่เลือก)")
+    out = view[view["ประเภท"]=="OUT"].copy() if not view.empty else pd.DataFrame(columns=TXNS_HEADERS)
+    if not out.empty:
+        out["จำนวน"] = pd.to_numeric(out["จำนวน"], errors="coerce").fillna(0)
+        pvt = out.pivot_table(index="สาขา", columns="ชื่ออุปกรณ์", values="จำนวน", aggfunc="sum", fill_value=0)
+        st.dataframe(pvt, use_container_width=True, height=240)
+        st.markdown("**กราฟรวมต่อสาขา (OUT)**")
+        try:
+            st.bar_chart(pvt.sum(axis=1))
+        except Exception:
+            pass
+    else:
+        st.info("ยังไม่มีข้อมูล OUT ในช่วงเวลาที่เลือก", icon="ℹ️")
+
+    # --- New: Tickets by Branch/Category ---
+    st.markdown("### สรุป Tickets แยกตามสาขาและหมวดหมู่ปัญหา (ช่วงเวลาที่เลือก)")
+    tv = tickets.copy()
+    if not tv.empty:
+        try:
+            tv["วันที่แจ้ง"] = pd.to_datetime(tv["วันที่แจ้ง"], errors="coerce")
+            tv = tv.dropna(subset=["วันที่แจ้ง"])
+            tv = tv[(tv["วันที่แจ้ง"].dt.date >= since) & (tv["วันที่แจ้ง"].dt.date <= until)]
+        except Exception:
+            tv = pd.DataFrame(columns=TICKETS_HEADERS)
+    if not tv.empty:
+        pvt2 = tv.pivot_table(index="สาขา", columns="หมวดหมู่", values="TicketID", aggfunc="count", fill_value=0)
+        st.dataframe(pvt2, use_container_width=True, height=240)
+        st.markdown("**กราฟสัดส่วน Tickets ต่อสาขา**")
+        try:
+            import matplotlib.pyplot as plt
+            totals = pvt2.sum(axis=1).sort_values(ascending=False)
+            fig, ax = plt.subplots()
+            ax.pie(totals.values, labels=totals.index, autopct='%1.1f%%')
+            ax.axis('equal')
+            st.pyplot(fig)
+        except Exception:
+            pass
+    else:
+        st.info("ยังไม่มี Tickets ในช่วงเวลาที่เลือก", icon="ℹ️")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
