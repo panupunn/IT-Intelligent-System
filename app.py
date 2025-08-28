@@ -656,7 +656,7 @@ def page_tickets(sh):
             tid = "T" + datetime.now(TZ).strftime("%y%m%d%H%M%S")
             now = datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
             catname = cat.split(" | ")[1] if cat else ""
-            row = [tid, now, (bopt.split(" | ")[0] if bopt else ""), who, catname, detail, "เปิด", "", now, ""]
+            row = [tid, now, (bopt.split(" | ")[0] if bopt else ""), who, catname, detail, "เปิดงาน", "", now, ""]
             df = pd.concat([df, pd.DataFrame([row], columns=TICKETS_HEADERS)], ignore_index=True)
             write_df(sh, SHEET_TICKETS, df); log_event(sh, get_username(), "TICKET_NEW", tid)
             st.success("สร้าง Ticket แล้ว", icon="✅")
@@ -664,7 +664,7 @@ def page_tickets(sh):
     with tab2:
         st.caption("กรองข้อมูล")
         c1,c2,c3 = st.columns(3)
-        status = c1.selectbox("สถานะ", options=["ทั้งหมด","เปิด","กำลังทำ","รออะไหล่","เสร็จ"], index=0)
+        status = c1.selectbox("สถานะ", options=["ทั้งหมด","เปิดงาน","กำลังดำเนินการ","รออะไหล่","จบงาน"], index=0)
         who = c2.text_input("ผู้แจ้ง (ค้นหา)")
         q = c3.text_input("คำค้น (รายละเอียด/หมวด)")
         view = tickets.copy()
@@ -676,7 +676,7 @@ def page_tickets(sh):
             with st.expander("อัปเดตสถานะ"):
                 sel = st.selectbox("เลือกรายการ", options=(view["TicketID"]+" | "+view["รายละเอียด"].str.slice(0,30)).tolist())
                 tid = sel.split(" | ")[0]
-                st_new = st.selectbox("สถานะใหม่", options=["เปิด","กำลังทำ","รออะไหล่","เสร็จ"], index=0)
+                st_new = st.selectbox("สถานะใหม่", options=["เปิดงาน","กำลังดำเนินการ","รออะไหล่","จบงาน"], index=0)
                 assignee = st.text_input("ผู้รับผิดชอบ", value="")
                 note = st.text_input("หมายเหตุเพิ่มเติม", value="")
                 if st.button("บันทึกการเปลี่ยนแปลง"):
