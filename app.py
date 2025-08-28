@@ -104,7 +104,7 @@ def open_sheet_by_url(sheet_url: str):
 
 def ensure_sheets_exist(sh):
     """สร้างชีตที่จำเป็นถ้ายังไม่มี + header"""
-    titles = [ws.title for ws in sh.worksheets()]
+    titles = list_worksheet_titles_cached(st.session_state.get("sheet_url",""))
     def _make(name, rows, cols, headers):
         ws = sh.add_worksheet(name, rows, cols)
         ws.append_row(headers)
@@ -120,29 +120,43 @@ def ensure_sheets_exist(sh):
     if SHEET_TICKET_CATS not in titles: _make(SHEET_TICKET_CATS, 200, len(TICKET_CAT_HEADERS)+2, TICKET_CAT_HEADERS)
     if SHEET_AUDIT not in titles: _make(SHEET_AUDIT, 2000, len(AUDIT_HEADERS)+2, AUDIT_HEADERS)
 
+
 def read_df(sh, title, headers):
-    """อ่านข้อมูลจากชีตแบบทนทาน"""
+    """อ่านข้อมูลจากชีตแบบทนทาน (ลดการเรียก API)"""
+    import time
     try:
         ws = sh.worksheet(title)
-    except Exception:
+    except Exception as e2:
+        # ไม่พยายาม ensure ทุกครั้ง เพื่อลด quota; ให้ทำ ensure แค่ครั้งเดียวที่ main
         try:
-            ensure_sheets_exist(sh)
-            ws = sh.worksheet(title)
-        except Exception as e2:
-            try:
-                titles = [w.title for w in sh.worksheets()]
-            except Exception:
-                titles = []
-            st.error("""ไม่สามารถเปิดชีตชื่อ **{}** ได้
+            titles = list_worksheet_titles_cached(st.session_state.get("sheet_url",""))
+        except Exception:
+            titles = []
+        st.warning("""ไม่สามารถเปิดชีตชื่อ **{}** ได้
+- ตรวจสอบว่ามีแท็บชื่อนี้อยู่จริง (ปัจจุบันพบ: {})
+- ไปที่ Settings > ทดสอบการเชื่อมต่อ อีกครั้งถ้าพึ่งสร้างชีต
+รายละเอียด: {}""".format(title, ", ".join(titles) if titles else "ไม่พบรายชื่อแท็บ", str(e2)), icon="⚠️")
+        return pd.DataFrame(columns=headers)
 
-- ตรวจสอบว่า URL ของ Google Sheet ถูกต้องและแชร์ให้ service account แล้ว
-- ตรวจสอบว่ามีแท็บชื่อ **{}** อยู่จริง (ปัจจุบันพบ: {})
-- ถ้าเพิ่งเปลี่ยนสิทธิ์การเข้าถึง ให้กดปุ่มรีเฟรช/ลองใหม่อีกครั้ง
+    # อ่านข้อมูล พร้อม soft-retry เมื่อเจอ 429
+    tries = 0
+    while True:
+        try:
+            vals = ws.get_all_values()
+            break
+        except Exception as e:
+            msg = str(e)
+            if "quota" in msg.lower() or "429" in msg:
+                if tries < 2:
+                    time.sleep(0.8 * (tries + 1))
+                    tries += 1
+                    continue
+            # ถ้าล้มเหลว ให้คืน DataFrame ว่าง เพื่อให้ UI ยังแสดงผลได้
+            st.error("อ่านข้อมูลจากชีต '{}' ไม่สำเร็จ: {}".format(title, msg), icon="❌")
+            return pd.DataFrame(columns=headers)
 
-รายละเอียดระบบ: {}""".format(title, title, ", ".join(titles) if titles else "ไม่สามารถอ่านรายชื่อชีตได้", str(e2)), icon="⚠️")
-            raise
-    vals = ws.get_all_values()
-    if not vals: return pd.DataFrame(columns=headers)
+    if not vals:
+        return pd.DataFrame(columns=headers)
     df = pd.DataFrame(vals[1:], columns=vals[0])
     return df if not df.empty else pd.DataFrame(columns=headers)
 
@@ -160,6 +174,72 @@ def log_event(sh, user, action, detail):
     write_df(sh, SHEET_AUDIT, df)
 
 # ---------- Utility ----------
+import time
+
+# ---------- Cache & Reload Helpers ----------
+def _titles_cache_get(url):
+    cache = st.session_state.setdefault("_titles_cache", {})
+    return cache.get(url)
+
+def _titles_cache_set(url, titles):
+    cache = st.session_state.setdefault("_titles_cache", {})
+    cache[url] = {"titles": titles, "ts": time.time()}
+
+def list_worksheet_titles_cached(sheet_url: str):
+    """Manual cache for worksheet titles with adjustable TTL stored in session/config."""
+    if not sheet_url:
+        return []
+    ttl = int(st.session_state.get("cache_ttl", 120))
+    ent = _titles_cache_get(sheet_url)
+    now = time.time()
+    if ent and now - ent["ts"] < ttl:
+        return ent["titles"]
+    try:
+        sh = open_sheet_by_url(sheet_url)
+        titles = [ws.title for ws in sh.worksheets()]
+        _titles_cache_set(sheet_url, titles)
+        return titles
+    except Exception:
+        return []
+
+def reload_data():
+    """Clear cached data and force re-run."""
+    st.session_state.pop("_titles_cache", None)
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    st.toast("รีโหลดข้อมูลแล้ว", icon="🔁")
+    safe_rerun()
+
+def add_reload_button():
+    st.button("🔁 รีโหลดข้อมูล", on_click=reload_data)
+
+def record_recent(key: str, row: list, headers: list):
+    df = st.session_state.get(f"recent_{key}")
+    new = pd.DataFrame([row], columns=headers)
+    if df is None or df.empty:
+        st.session_state[f"recent_{key}"] = new
+    else:
+        st.session_state[f"recent_{key}"] = pd.concat([df, new], ignore_index=True).tail(10)
+
+# ---------- Quota-friendly helpers ----------
+@st.cache_data(ttl=60, show_spinner=False)
+def list_worksheet_titles_cached(sheet_url: str):
+    """Cache worksheet titles for 60s to reduce 'worksheets()' calls."""
+    try:
+        sh = open_sheet_by_url(sheet_url)
+        return [ws.title for ws in sh.worksheets()]
+    except Exception:
+        return []
+
+def ensure_sheets_exist_once(sh):
+    """Ensure sheets only once per session after connection to avoid quota blow-ups."""
+    if st.session_state.get("sheets_ensured"):
+        return
+    ensure_sheets_exist(sh)
+    st.session_state["sheets_ensured"] = True
+
 # ---------- Auth & Connection ----------
 def require_login():
     if not st.session_state.get("logged_in", False):
@@ -199,6 +279,8 @@ def load_config_into_session():
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
             url = cfg.get("sheet_url", "")
+            ttl = int(cfg.get("cache_ttl", 120))
+            st.session_state["cache_ttl"] = ttl
             if url:
                 st.session_state["sheet_url"] = url
                 if "sh" not in st.session_state:
@@ -218,7 +300,7 @@ def save_config_from_session():
         url = st.session_state.get("sheet_url", "")
         if url:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump({"sheet_url": url, "connected": True}, f, ensure_ascii=False, indent=2)
+                json.dump({"sheet_url": url, "connected": True, "cache_ttl": int(st.session_state.get("cache_ttl",120))}, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
@@ -229,7 +311,7 @@ def save_config_from_session():
         url = st.session_state.get("sheet_url", "")
         if url:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump({"sheet_url": url, "connected": True}, f, ensure_ascii=False, indent=2)
+                json.dump({"sheet_url": url, "connected": True, "cache_ttl": int(st.session_state.get("cache_ttl",120))}, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
@@ -293,6 +375,7 @@ def render_import_box(df_upload, required_cols, rename_map=None):
 # ---------- Pages ----------
 
 def page_dashboard(sh):
+    add_reload_button()
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("📊 Dashboard")
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
     txns  = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
@@ -419,7 +502,10 @@ def render_categories_admin(sh):
                 else:
                     df = pd.concat([df, pd.DataFrame([[code_in, name_in]], columns=CATS_HEADERS)], ignore_index=True); msg="เพิ่มใหม่"
                 write_df(sh, SHEET_CATS, df); log_event(sh, get_username(), "CAT_SAVE", f"{msg}: {code_in} -> {name_in}")
-                st.success(f"{msg}เรียบร้อย", icon="✅"); safe_rerun()
+                st.success(f"{msg}เรียบร้อย", icon="✅")
+                record_recent("items", new_row, ITEMS_HEADERS)
+                st.markdown("### รายการที่เพิ่ม/แก้ไขล่าสุด")
+                st.dataframe(st.session_state.get("recent_items"), use_container_width=True, height=160)
 
     with tab2:
         with st.expander("วิธีใช้งาน/เทมเพลต", expanded=False):
@@ -464,31 +550,8 @@ def render_categories_admin(sh):
                         st.success(f"สำเร็จ • เพิ่ม {added} • อัปเดต {updated}", icon="✅"); safe_rerun()
 
     with tab3:
-        q = st.text_input("ค้นหา (รหัส/ชื่อ)")
-        view = cats if not q else cats[cats.apply(lambda r: r.astype(str).str.contains(q, case=False).any(), axis=1)]
-        edited = st.data_editor(view.sort_values("รหัสหมวด"), use_container_width=True, height=360, disabled=["รหัสหมวด"])
-        cL, cM, cR = st.columns(3)
-        if cL.button("บันทึกการแก้ไข"):
-            base = read_df(sh, SHEET_CATS, CATS_HEADERS)
-            for _, r in edited.iterrows():
-                base.loc[base["รหัสหมวด"] == str(r["รหัสหมวด"]).strip().upper(), "ชื่อหมวด"] = str(r["ชื่อหมวด"]).strip()
-            write_df(sh, SHEET_CATS, base); log_event(sh, get_username(), "CAT_EDIT_TABLE", f"{len(edited)} rows")
-            st.success("บันทึกแล้ว", icon="✅"); safe_rerun()
-        with cR:
-            base = read_df(sh, SHEET_CATS, CATS_HEADERS)
-            opts = (base["รหัสหมวด"]+" | "+base["ชื่อหมวด"]).tolist() if not base.empty else []
-            picks = st.multiselect("เลือกลบ (เฉพาะหมวดที่ไม่ถูกใช้งาน)", options=opts)
-            if st.button("ลบที่เลือก"):
-                items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
-                used = set(items["หมวดหมู่"].tolist()) if not items.empty else set()
-                to_del = {x.split(" | ")[0] for x in picks}
-                blocked = sorted(list(used.intersection(to_del)))
-                if blocked:
-                    st.error("ไม่สามารถลบได้: หมวดถูกใช้งานใน Items: " + ", ".join(blocked), icon="⚠️")
-                else:
-                    base = base[~base["รหัสหมวด"].isin(list(to_del))]
-                    write_df(sh, SHEET_CATS, base); log_event(sh, get_username(), "CAT_DELETE", f"{len(to_del)} rows")
-                    st.success("ลบแล้ว", icon="✅"); safe_rerun()
+        render_categories_admin(sh)
+
 
 def generate_item_code(items_df):
     prefix = "IT"
@@ -498,7 +561,9 @@ def generate_item_code(items_df):
     n = max(nums) if nums else 0
     return f"{prefix}{n+1:04d}"
 
+
 def page_stock(sh):
+    add_reload_button()
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("📦 คลังอุปกรณ์")
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS); cats  = read_df(sh, SHEET_CATS, CATS_HEADERS)
     q = st.text_input("ค้นหา (รหัส/ชื่อ/หมวด)")
@@ -530,14 +595,16 @@ def page_stock(sh):
                 df = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
                 code_final = code.strip().upper() or generate_item_code(df)
                 new_row = [code_final, cat_opt, name.strip(), unit.strip(), str(qty), str(rop), loc.strip(), active]
-                # update if exists else append
                 if (df["รหัส"] == code_final).any():
                     df.loc[df["รหัส"] == code_final, ITEMS_HEADERS[1]:] = new_row[1:]
                     msg="อัปเดต"
                 else:
                     df = pd.concat([df, pd.DataFrame([new_row], columns=ITEMS_HEADERS)], ignore_index=True); msg="เพิ่มใหม่"
                 write_df(sh, SHEET_ITEMS, df); log_event(sh, get_username(), "ITEM_SAVE", f"{msg}: {code_final}")
-                st.success(f"{msg}เรียบร้อย", icon="✅"); safe_rerun()
+                st.success(f"{msg}เรียบร้อย", icon="✅")
+                record_recent("items", new_row, ITEMS_HEADERS)
+                st.markdown("### รายการที่เพิ่ม/แก้ไขล่าสุด")
+                st.dataframe(st.session_state.get("recent_items"), use_container_width=True, height=160)
 
         with t_edit:
             if items.empty: st.info("ยังไม่มีรายการอุปกรณ์ในคลัง", icon="ℹ️")
@@ -556,7 +623,7 @@ def page_stock(sh):
                 if save:
                     items.loc[items["รหัส"]==code_sel, ["ชื่ออุปกรณ์","หน่วย","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ","ใช้งาน"]] = [name, unit, str(qty), str(rop), loc, "Y" if active=="Y" else "N"]
                     write_df(sh, SHEET_ITEMS, items); log_event(sh, get_username(), "ITEM_UPDATE", code_sel)
-                    st.success("บันทึกแล้ว", icon="✅"); safe_rerun()
+                    st.success("บันทึกแล้ว", icon="✅")
 
         with t_cat:
             render_categories_admin(sh)
@@ -564,7 +631,9 @@ def page_stock(sh):
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+
 def page_issue_receive(sh):
+    add_reload_button()
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("📥 เบิก/รับเข้า")
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
     branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
@@ -596,13 +665,13 @@ def page_issue_receive(sh):
                 write_df(sh, SHEET_ITEMS, items)
                 txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
                 branch_code = bopt.split(" | ")[0] if bopt else ""
-                txns = pd.concat([txns, pd.DataFrame([[
-                    str(uuid.uuid4())[:8],
-                    datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"),
-                    "OUT", code_sel, row["ชื่ออุปกรณ์"], branch_code, str(qty), by, note
-                ]], columns=TXNS_HEADERS)], ignore_index=True)
+                new_txn = [str(uuid.uuid4())[:8], datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"), "OUT", code_sel, row["ชื่ออุปกรณ์"], branch_code, str(qty), by, note]
+                txns = pd.concat([txns, pd.DataFrame([new_txn], columns=TXNS_HEADERS)], ignore_index=True)
                 write_df(sh, SHEET_TXNS, txns); log_event(sh, get_username(), "ISSUE", f"{code_sel} x {qty} @ {branch_code}")
                 st.success("บันทึกแล้ว", icon="✅")
+                record_recent("txns", new_txn, TXNS_HEADERS)
+                st.markdown("### รายการที่บันทึกล่าสุด")
+                st.dataframe(st.session_state.get("recent_txns"), use_container_width=True, height=160)
 
     with t2:
         with st.form("receive", clear_on_submit=True):
@@ -620,18 +689,19 @@ def page_issue_receive(sh):
             write_df(sh, SHEET_ITEMS, items)
             txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
             branch_code = bopt.split(" | ")[0] if bopt else ""
-            txns = pd.concat([txns, pd.DataFrame([[
-                str(uuid.uuid4())[:8],
-                datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"),
-                "IN", code_sel, row["ชื่ออุปกรณ์"], branch_code, str(qty), by, note
-            ]], columns=TXNS_HEADERS)], ignore_index=True)
+            new_txn = [str(uuid.uuid4())[:8], datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"), "IN", code_sel, row["ชื่ออุปกรณ์"], branch_code, str(qty), by, note]
+            txns = pd.concat([txns, pd.DataFrame([new_txn], columns=TXNS_HEADERS)], ignore_index=True)
             write_df(sh, SHEET_TXNS, txns); log_event(sh, get_username(), "RECEIVE", f"{code_sel} x {qty} @ {branch_code}")
-            st.success("บันทึกแล้ว", icon="✅")
+            st.success("บันทึกรับเข้าแล้ว", icon="✅")
+            record_recent("txns", new_txn, TXNS_HEADERS)
+            st.markdown("### รายการที่บันทึกล่าสุด")
+            st.dataframe(st.session_state.get("recent_txns"), use_container_width=True, height=160)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 
 def page_tickets(sh):
+    add_reload_button()
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets)")
     cats = read_df(sh, SHEET_TICKET_CATS, TICKET_CAT_HEADERS)
     tickets = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
@@ -660,6 +730,9 @@ def page_tickets(sh):
             df = pd.concat([df, pd.DataFrame([row], columns=TICKETS_HEADERS)], ignore_index=True)
             write_df(sh, SHEET_TICKETS, df); log_event(sh, get_username(), "TICKET_NEW", tid)
             st.success("สร้าง Ticket แล้ว", icon="✅")
+            record_recent("tickets", row, TICKETS_HEADERS)
+            st.markdown("### รายการ Ticket ที่สร้างล่าสุด")
+            st.dataframe(st.session_state.get("recent_tickets"), use_container_width=True, height=160)
 
     with tab2:
         st.caption("กรองข้อมูล")
@@ -703,7 +776,10 @@ def page_tickets(sh):
                         else:
                             base = pd.concat([base, pd.DataFrame([[code_in, name_in]], columns=TICKET_CAT_HEADERS)], ignore_index=True); msg="เพิ่มใหม่"
                         write_df(sh, SHEET_TICKET_CATS, base); log_event(sh, get_username(), "TICKET_CAT_SAVE", f"{msg}: {code_in}")
-                        st.success(f"{msg}เรียบร้อย", icon="✅"); safe_rerun()
+                        st.success(f"{msg}เรียบร้อย", icon="✅")
+                record_recent("items", new_row, ITEMS_HEADERS)
+                st.markdown("### รายการที่เพิ่ม/แก้ไขล่าสุด")
+                st.dataframe(st.session_state.get("recent_items"), use_container_width=True, height=160)
 
             with t2:
                 q = st.text_input("ค้นหา (รหัส/ชื่อ)", key="tkcat_search")
@@ -714,12 +790,13 @@ def page_tickets(sh):
                     for _, r in edited.iterrows():
                         base.loc[base["รหัสหมวดปัญหา"] == str(r["รหัสหมวดปัญหา"]).strip().upper(), "ชื่อหมวดปัญหา"] = str(r["ชื่อหมวดปัญหา"]).strip()
                     write_df(sh, SHEET_TICKET_CATS, base); log_event(sh, get_username(), "TICKET_CAT_EDIT_TABLE", f"{len(edited)} rows")
-                    st.success("บันทึกแล้ว", icon="✅"); safe_rerun()
+                    st.success("บันทึกแล้ว", icon="✅")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 
 def page_reports(sh):
+    add_reload_button()
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("📑 รายงาน")
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
     txns  = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
@@ -809,7 +886,7 @@ def ensure_credentials_ui():
 def test_sheet_connection(url):
     try:
         sh = open_sheet_by_url(url); ensure_sheets_exist(sh)
-        titles = [ws.title for ws in sh.worksheets()]
+        titles = list_worksheet_titles_cached(st.session_state.get("sheet_url",""))
         return True, titles
     except Exception as e:
         return False, str(e)
@@ -819,6 +896,13 @@ def page_settings():
     ok = ensure_credentials_ui()
     st.text_input("Google Sheet URL", key="sheet_url", value=st.session_state.get("sheet_url",""))
     if st.button("บันทึก URL"):
+        save_config_from_session()
+        try:
+            st.session_state["sh"] = open_sheet_by_url(st.session_state.get("sheet_url",""))
+            ensure_sheets_exist_once(st.session_state["sh"])
+            st.session_state["connected"] = True
+        except Exception:
+            pass
         st.success("บันทึก URL แล้ว", icon="✅")
     c1,c2,c3 = st.columns(3)
     if c1.button("ทดสอบการเชื่อมต่อ"):
@@ -840,10 +924,15 @@ def page_settings():
     if c2.button("สร้าง PDF ทดสอบฟอนต์ไทย"):
         data = sample_pdf(True)
         st.download_button("ดาวน์โหลด PDF", data=data, file_name="sample_thai.pdf", mime="application/pdf")
+    st.slider("TTL แคชรายชื่อแท็บ (วินาที)", 10, 600, key="cache_ttl", help="ช่วงเวลาก่อนจะโหลดรายชื่อแท็บจาก Google Sheet ใหม่")
+    if st.button("บันทึก TTL แคช"):
+        save_config_from_session(); st.success("บันทึก TTL แล้ว", icon="✅")
+
     if c3.button("ล้างแคชการเชื่อมต่อ"):
         _get_client.clear(); open_sheet_by_url.clear(); st.success("ล้างแคชแล้ว", icon="✅")
 
 def page_users_admin(sh):
+    add_reload_button()
     st.subheader("👥 ผู้ใช้")
     users = read_df(sh, SHEET_USERS, USERS_HEADERS)
     st.dataframe(users, use_container_width=True, height=260)
