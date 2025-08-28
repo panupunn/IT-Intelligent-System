@@ -52,25 +52,59 @@ def save_config_from_session():
 def get_username(): return st.session_state.get("username","admin")
 
 # ---------- Google Sheets ----------
+
+def have_credentials() -> bool:
+    """Check if we have credentials available in any supported location."""
+    if os.path.exists("service_account.json"):
+        return True
+    if "service_account" in st.secrets:
+        return True
+    if os.getenv("GOOGLE_CREDENTIALS"):
+        return True
+    return False
+
+def _ensure_creds_file():
+    """Write credentials to service_account.json if found in secrets/env; return bool."""
+    creds_path = "service_account.json"
+    if os.path.exists(creds_path):
+        return True
+    try:
+        if "service_account" in st.secrets:
+            json.dump(dict(st.secrets["service_account"]), open(creds_path,"w"))
+            return True
+        env_json = os.getenv("GOOGLE_CREDENTIALS")
+        if env_json:
+            json.dump(json.loads(env_json), open(creds_path,"w"))
+            return True
+    except Exception:
+        pass
+    return False
+
 def _connect_if_needed():
-    if st.session_state.get("sh"):  # already
+    if st.session_state.get("sh"):
         return st.session_state["sh"]
     url = st.session_state.get("sheet_url","")
-    if not url:
+    if not url or not have_credentials():
         return None
-    sh = open_sheet_by_url(url)
-    ensure_sheets_exist(sh)
-    st.session_state["sh"] = sh
-    st.session_state["connected"] = True
-    return sh
+    try:
+        sh = open_sheet_by_url(url)
+        ensure_sheets_exist(sh)
+        st.session_state["sh"] = sh
+        st.session_state["connected"] = True
+        save_config_from_session()
+        return sh
+    except Exception as e:
+        st.warning(f"ยังเชื่อมต่อชีตไม่ได้: {e}", icon="⚠️")
+        st.session_state.pop("sh", None)
+        st.session_state["connected"] = False
+        return None
 
 def open_sheet_by_url(url: str):
     import gspread
-    # try service_account.json from working dir or from st.secrets if available
-    creds_path = "service_account.json"
-    if not os.path.exists(creds_path) and "service_account" in st.secrets:
-        json.dump(dict(st.secrets["service_account"]), open(creds_path,"w"))
-    gc = gspread.service_account(filename=creds_path)
+    # Ensure we have a creds file; otherwise raise friendly
+    if not _ensure_creds_file():
+        raise FileNotFoundError("ไม่พบ service_account.json และไม่มีคีย์ใน Secrets/ENV")
+    gc = gspread.service_account(filename="service_account.json")
     return gc.open_by_url(url)
 
 def ensure_sheets_exist(sh):
@@ -135,11 +169,19 @@ def record_recent(key: str, row: list, headers: list):
     st.session_state[f"recent_{key}"] = new if df is None else pd.concat([df, new], ignore_index=True).tail(10)
 
 def require_login():
-    if "logged_in" not in st.session_state:
-        st.session_state["logged_in"]=True
-        st.session_state["username"]="admin"
-        st.session_state["role"]="admin"
-    return True
+    if st.session_state.get("logged_in"):
+        return True
+    st.title("เข้าสู่ระบบ")
+    u = st.text_input("ชื่อผู้ใช้", key="login_user")
+    if st.button("เข้าสู่ระบบ"):
+        if u.strip():
+            st.session_state["logged_in"]=True
+            st.session_state["username"]=u.strip()
+            st.session_state["role"]= "admin" if u.strip().lower()=="admin" else "staff"
+            return True
+        else:
+            st.warning("กรุณากรอกชื่อผู้ใช้", icon="⚠️")
+    st.stop()
 
 # =============================
 # Pages
@@ -469,6 +511,7 @@ def page_settings(sh):
     add_reload_button()
     st.subheader("⚙️ Settings")
     st.text_input("Google Sheet URL", key="sheet_url", value=st.session_state.get("sheet_url",""))
+    st.write("สถานะคีย์บริการ:", "✅ พบไฟล์" if have_credentials() else "❌ ยังไม่มีไฟล์")
     up = st.file_uploader("อัปโหลด service_account.json", type=["json"])
     if up is not None:
         open("service_account.json","wb").write(up.read())
@@ -478,10 +521,11 @@ def page_settings(sh):
         save_config_from_session()
         sh = _connect_if_needed()
         if sh: st.success("เชื่อมต่อสำเร็จ", icon="✅")
+        else: st.info("ยังเชื่อมต่อไม่ได้ กรุณาตรวจสอบ URL หรืออัปโหลด service_account.json", icon="ℹ️")
     if c2.button("ทดสอบการเชื่อมต่อ"):
         sh = _connect_if_needed()
         if sh: st.success("เชื่อมต่อสำเร็จ", icon="✅")
-        else: st.error("ยังไม่ได้ตั้งค่า", icon="❌")
+        else: st.error("ยังไม่ได้ตั้งค่าหรือยังไม่มีคีย์", icon="❌")
     st.slider("TTL แคช (วินาที)", 10, 600, key="cache_ttl")
     st.write("สถานะการเชื่อมต่อ:", "✅ พร้อม" if st.session_state.get("sh") else "❌ ยังไม่ได้เชื่อม")
 
@@ -490,10 +534,12 @@ def page_settings(sh):
 # =============================
 def main():
     st.set_page_config(page_title="IT Intelligent System", layout="wide")
-    require_login()
     load_config_into_session()
+    require_login()
     sh = _connect_if_needed()
     st.sidebar.title("เมนู")
+    if not st.session_state.get("sh"):
+        st.sidebar.warning("ยังไม่ได้เชื่อม Google Sheet → ไปที่ Settings เพื่อเชื่อมครั้งแรก", icon="ℹ️")
     page = st.sidebar.radio("", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets)","📥 เบิก/รับเข้า","📑 รายงาน","👥 ผู้ใช้","⚙️ Settings"])
     st.sidebar.markdown("---")
     st.sidebar.caption(f"Role: {st.session_state.get('role','admin')}")
