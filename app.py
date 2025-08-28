@@ -311,6 +311,9 @@ def page_dashboard(sh):
     st.metric("จำนวนอุปกรณ์", f"{total_items:,}")
     st.metric("ต่ำกว่า ROP", f"{low_rop:,}")
     st.metric("Tickets ทั้งหมด", f"{len(tickets):,}")
+    # Create columns for bottom charts
+    c3, c4 = st.columns(2)
+
     # Top branches by OUT (30 days)
     with c3:
         st.markdown("**TOP 5 สาขาที่เบิกมากสุด (30 วัน)**")
