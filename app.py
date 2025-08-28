@@ -35,6 +35,7 @@ def safe_rerun():
 APP_TITLE = "IT Intelligent System"
 APP_TAGLINE = "Minimal, Modern, and Practical"
 CREDENTIALS_FILE = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "service_account.json")
+CONFIG_FILE = os.environ.get("ITIS_CONFIG_FILE", "app_config.json")
 TZ = pytz.timezone("Asia/Bangkok")
 
 # Sheet names & headers
@@ -159,6 +160,28 @@ def log_event(sh, user, action, detail):
     write_df(sh, SHEET_AUDIT, df)
 
 # ---------- Utility ----------
+def load_config_into_session():
+    """โหลดค่าคอนฟิก (เช่น sheet_url) ใส่ session_state ถ้ายังไม่มี"""
+    try:
+        if "sheet_url" not in st.session_state and os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            url = cfg.get("sheet_url", "")
+            if url:
+                st.session_state["sheet_url"] = url
+    except Exception:
+        pass
+
+def save_config_from_session():
+    """บันทึกค่า sheet_url ลงไฟล์คอนฟิก เพื่อให้คงอยู่ข้ามการ rerun/menu"""
+    try:
+        url = st.session_state.get("sheet_url", "")
+        if url:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump({"sheet_url": url}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 def find_thai_font():
     candidates = [
         ("ThaiFont", "./fonts/Sarabun-Regular.ttf", "./fonts/Sarabun-Bold.ttf"),
@@ -561,8 +584,11 @@ def page_settings():
             st.error("กรุณาใส่ Google Sheet URL ก่อน", icon="⚠️")
         else:
             ok, info = test_sheet_connection(url)
-            if ok: st.success("เชื่อมต่อได้ และตรวจสอบ/สร้างชีตที่จำเป็นแล้ว: " + ", ".join(info), icon="✅")
-            else: st.error("เชื่อมต่อไม่สำเร็จ: " + str(info), icon="❌")
+            if ok:
+                st.success("เชื่อมต่อได้ และตรวจสอบ/สร้างชีตที่จำเป็นแล้ว: " + ", ".join(info), icon="✅")
+                save_config_from_session()
+            else:
+                st.error("เชื่อมต่อไม่สำเร็จ: " + str(info), icon="❌")
     if c2.button("สร้าง PDF ทดสอบฟอนต์ไทย"):
         data = sample_pdf(True)
         st.download_button("ดาวน์โหลด PDF", data=data, file_name="sample_thai.pdf", mime="application/pdf")
@@ -591,6 +617,8 @@ def main():
     st.set_page_config(page_title=APP_TITLE, page_icon="🧰", layout="wide")
     st.markdown(MINIMAL_CSS, unsafe_allow_html=True); st.markdown(RESPONSIVE_CSS, unsafe_allow_html=True)
     st.title(APP_TITLE); st.caption(APP_TAGLINE)
+    # โหลดค่า sheet_url จากไฟล์คอนฟิก (ถ้าก่อนหน้าเคยทดสอบสำเร็จ)
+    load_config_into_session()
 
     # Sidebar menu with icons
     with st.sidebar:
@@ -602,7 +630,7 @@ def main():
         st.markdown("---")
         st.write("**admin**"); st.caption("Role: admin")
         if st.button("ออกจากระบบ"):
-            st.session_state.clear(); safe_rerun()
+            st.session_state.clear(); load_config_into_session(); safe_rerun()
 
     if page == "⚙️ Settings":
         page_settings(); st.caption("© 2025 IT Stock · Streamlit + Google Sheets"); return
