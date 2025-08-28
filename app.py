@@ -10,7 +10,7 @@ v11:
   * ถ้าไม่พบฟอนต์ จะแจ้งเตือนในหน้าเว็บให้ติดตั้ง และยังสร้าง PDF ได้ด้วยฟอนต์เริ่มต้น
 - รวมทุกฟีเจอร์จาก v10 (Dashboard, Stock, เบิก/รับ, รายงาน, Users, นำเข้า/แก้ไข หมวดหมู่, Settings + Clear test data)
 """
-import os, io, uuid, re
+import os, io, uuid, re, time
 from datetime import datetime, timedelta, date, time as dtime
 import pytz, pandas as pd, streamlit as st
 from reportlab.lib.pagesizes import A4, landscape
@@ -20,6 +20,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 import gspread
+from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
 import bcrypt
 import altair as alt
@@ -120,11 +121,49 @@ def ensure_sheets_exist(sh):
     if SHEET_TICKET_CATS not in titles:
         ws = sh.add_worksheet(SHEET_TICKET_CATS, 200, len(TICKET_CAT_HEADERS)+2); ws.append_row(TICKET_CAT_HEADERS)
 
-def read_df(sh, title, headers):
-    ws = sh.worksheet(title); vals = ws.get_all_values()
-    if not vals: return pd.DataFrame(columns=headers)
-    df = pd.DataFrame(vals[1:], columns=vals[0])
-    return df if not df.empty else pd.DataFrame(columns=headers)
+# ---- Lightweight in-process cache for Google Sheets reads ----
+_READ_CACHE = {}
+
+def clear_read_cache():
+    _READ_CACHE.clear()
+
+def _get_all_values_with_retry(ws, max_attempts: int = 5):
+    # Call ws.get_all_values() with simple exponential backoff for 429/5xx errors.
+    for attempt in range(max_attempts):
+        try:
+            return ws.get_all_values()
+        except Exception as e:
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            message = str(e)
+            retryable = (status in (429, 500, 503)) or ('429' in message) or ('Quota exceeded' in message)
+            if not retryable or attempt == max_attempts - 1:
+                raise
+            sleep_s = min(2 ** attempt, 16)
+            time.sleep(sleep_s)
+
+def read_df(sh, title, headers, _ttl_seconds: int = 15):
+    # Read a worksheet into DataFrame with retry + short-term caching.
+    try:
+        sh_id = getattr(sh, 'id', None) or getattr(sh, 'spreadsheet_id', None) or 'unknown'
+    except Exception:
+        sh_id = 'unknown'
+    key = (str(sh_id), str(title), tuple(headers))
+    now = time.time()
+    entry = _READ_CACHE.get(key)
+    if entry and (now - entry['ts'] < _ttl_seconds):
+        return entry['df'].copy()
+
+    ws = sh.worksheet(title)
+    vals = _get_all_values_with_retry(ws)
+    if not vals:
+        df = pd.DataFrame(columns=headers)
+    else:
+        df = pd.DataFrame(vals[1:], columns=vals[0])
+        if df.empty:
+            df = pd.DataFrame(columns=headers)
+
+    _READ_CACHE[key] = {'df': df.copy(), 'ts': now}
+    return df
 
 def write_df(sh, title, df):
     if title==SHEET_ITEMS: cols=ITEMS_HEADERS
@@ -138,8 +177,11 @@ def write_df(sh, title, df):
     df = df[cols]
     ws = sh.worksheet(title)
     ws.clear(); ws.update([df.columns.values.tolist()] + df.values.tolist())
+    clear_read_cache()
 
-def append_row(sh, title, row): sh.worksheet(title).append_row(row)
+def append_row(sh, title, row):
+    sh.worksheet(title).append_row(row)
+    clear_read_cache()
 
 def auth_block(sh):
     st.session_state.setdefault("user", None); st.session_state.setdefault("role", None)
