@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+ -*- coding: utf-8 -*-
 """
 IT Stock (Streamlit + Google Sheets)
 v11:
@@ -1441,8 +1441,8 @@ def main():
     if "sheet_url" not in st.session_state or not st.session_state.get("sheet_url"): st.session_state["sheet_url"] = DEFAULT_SHEET_URL
     with st.sidebar:
         st.markdown("---")
-        page = st.radio("เมนู", ["Dashboard","Stock","แจ้งปัญหา","เบิก/รับเข้า","รายงาน","ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","Settings"], index=0)
-    if page == "Settings":
+        page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
+    if "Settings" in page:
         page_settings(); st.caption("© 2025 IT Stock · Streamlit + Google Sheets"); return
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
     if not sheet_url:
@@ -1453,13 +1453,13 @@ def main():
         st.error(f"เปิดชีตไม่สำเร็จ: {e}"); return
     ensure_sheets_exist(sh)
     auth_block(sh)
-    if page=="Dashboard": page_dashboard(sh)
-    elif page=="Stock": page_stock(sh)
-    elif page=="แจ้งปัญหา": page_tickets(sh)
-    elif page=="เบิก/รับเข้า": page_issue_receive(sh)
-    elif page=="รายงาน": page_reports(sh)
-    elif page=="ผู้ใช้": page_users_admin(sh)
-    elif page=="นำเข้า/แก้ไข หมวดหมู่": page_import(sh)
+    if page.startswith("📊"): page_dashboard(sh)
+    elif page.startswith("📦"): page_stock(sh)
+    elif page.startswith("🛠️"): page_tickets(sh)
+    elif page.startswith("🧾"): page_issue_receive(sh)
+    elif page.startswith("📑"): page_reports(sh)
+    elif page.startswith("👤") or page.startswith("👥"): page_users_admin(sh)
+    elif page.startswith("นำเข้า") or page.startswith("🗂️"): page_import(sh)
     st.caption("© 2025 IT Stock · Streamlit + Google Sheets")
 
 if __name__ == "__main__":
