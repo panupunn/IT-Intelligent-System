@@ -162,9 +162,35 @@ def ensure_sheets_exist(sh):
     if SHEET_TICKET_CATS not in titles:
         ws = sh.add_worksheet(SHEET_TICKET_CATS, 200, len(TICKET_CAT_HEADERS)+2); ws.append_row(TICKET_CAT_HEADERS)
 
+
+
 def read_df(sh, title, headers):
-    ws = sh.worksheet(title); vals = ws.get_all_values()
-    if not vals: return pd.DataFrame(columns=headers)
+    """อ่านข้อมูลจากชีตแบบทนทาน: ถ้าไม่พบชีต จะพยายามสร้างให้ และแจ้งสาเหตุที่เป็นไปได้ชัดเจน"""
+    try:
+        ws = sh.worksheet(title)
+    except Exception as e:
+        try:
+            ensure_sheets_exist(sh)
+            ws = sh.worksheet(title)
+        except Exception as e2:
+            import streamlit as st
+            try:
+                titles = [w.title for w in sh.worksheets()]
+            except Exception:
+                titles = []
+            st.error("""ไม่สามารถเปิดชีตชื่อ **{}** ได้
+
+- ตรวจสอบว่า URL ของ Google Sheet ถูกต้องและแชร์ให้ service account แล้ว
+- ตรวจสอบว่ามีแท็บชื่อ **{}** อยู่จริง (ปัจจุบันพบ: {})
+- ถ้าเพิ่งเปลี่ยนสิทธิ์การเข้าถึง ให้กดปุ่มรีเฟรช/ลองใหม่อีกครั้ง
+
+รายละเอียดระบบ: {}""".format(
+                    title, title, ", ".join(titles) if titles else "ไม่สามารถอ่านรายชื่อชีตได้", str(e2)
+                ))
+            raise
+    vals = ws.get_all_values()
+    if not vals:
+        return pd.DataFrame(columns=headers)
     df = pd.DataFrame(vals[1:], columns=vals[0])
     return df if not df.empty else pd.DataFrame(columns=headers)
 
@@ -241,7 +267,7 @@ def df_to_pdf_bytes(df, title="📑 รายงาน", subtitle=""):
     f = register_thai_fonts()
     use_thai = f["normal"] is not None
     if not use_thai:
-        st.warning("ไม่พบฟอนต์ไทยสำหรับ PDF (Sarabun / TH Sarabun New / Noto Sans Thai). โปรดวางไฟล์ .ttf ไว้ในโฟลเดอร์ ./fonts แล้วลองใหม่อีกครั้ง.", icon="⚠️")
+        st.warning("ไม่พบฟอนต์ไทยสำหรับ PDF (Sarabun / TH Sarabun New / Noto Sans Thai). โปรดวางไฟล์ .ttf ไว้ในโฟลเดอร์ ./fonts แล้วลองใหม่อีกครั้ง.", icon=⚠️")
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
