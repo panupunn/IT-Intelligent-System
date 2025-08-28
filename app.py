@@ -474,19 +474,28 @@ def page_dashboard(sh):
 
 
 
+
+
+
         if len(charts)==0:
+
+
+
             st.info("โปรดเลือกกราฟที่ต้องการแสดงจากด้านบน")
-    else:
-        rows = (len(charts) + per_row - 1) // per_row
-        idx = 0
-        for r in range(rows):
-            cols = st.columns(per_row)
-            for c in range(per_row):
-                if idx >= len(charts): break
-                title, df, label_col, value_col = charts[idx]
-                with cols[c]:
-                    make_pie(df, label_col, value_col, top_n, title)
-                idx += 1
+
+
+
+        else:
+            rows = (len(charts) + per_row - 1) // per_row
+            idx = 0
+            for r in range(rows):
+                cols = st.columns(per_row)
+                for c in range(per_row):
+                    if idx >= len(charts): break
+                    title, df, label_col, value_col = charts[idx]
+                    with cols[c]:
+                        make_pie(df, label_col, value_col, top_n, title)
+                    idx += 1
 
     items_num = items.copy()
     if not items_num.empty:
