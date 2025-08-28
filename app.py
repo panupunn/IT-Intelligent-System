@@ -191,8 +191,9 @@ def connect_sheet_if_ready():
     except Exception:
         return None
 
+
 def load_config_into_session():
-    """โหลดค่าคอนฟิก (เช่น sheet_url) ใส่ session_state ถ้ายังไม่มี"""
+    """โหลดค่าคอนฟิก (เช่น sheet_url) ใส่ session_state ถ้ายังไม่มี พร้อมเชื่อมต่ออัตโนมัติถ้า URL พร้อม"""
     try:
         if "sheet_url" not in st.session_state and os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -200,6 +201,14 @@ def load_config_into_session():
             url = cfg.get("sheet_url", "")
             if url:
                 st.session_state["sheet_url"] = url
+                if "sh" not in st.session_state:
+                    try:
+                        sh = open_sheet_by_url(url)
+                        ensure_sheets_exist(sh)
+                        st.session_state["sh"] = sh
+                        st.session_state["connected"] = True
+                    except Exception:
+                        pass
     except Exception:
         pass
 
@@ -209,7 +218,18 @@ def save_config_from_session():
         url = st.session_state.get("sheet_url", "")
         if url:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump({"sheet_url": url}, f, ensure_ascii=False, indent=2)
+                json.dump({"sheet_url": url, "connected": True}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def save_config_from_session():
+    """บันทึกค่า sheet_url ลงไฟล์คอนฟิก เพื่อให้คงอยู่ข้ามการ rerun/menu"""
+    try:
+        url = st.session_state.get("sheet_url", "")
+        if url:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump({"sheet_url": url, "connected": True}, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
@@ -298,6 +318,7 @@ def page_dashboard(sh):
     # Chart 1: ยอดคงเหลือต่อหมวดหมู่
     with c1:
         st.markdown("**คงเหลือรวมต่อหมวดหมู่**")
+        chart_type = st.radio("รูปแบบกราฟ", ["แท่ง (Bar)","วงกลม (Pie)"], horizontal=True, key="chart_cat_type")
         if items.empty:
             st.info("ยังไม่มีข้อมูลคงเหลือ", icon="ℹ️")
         else:
@@ -305,10 +326,17 @@ def page_dashboard(sh):
                 grp = items.copy()
                 grp["คงเหลือ"] = pd.to_numeric(grp["คงเหลือ"], errors="coerce").fillna(0)
                 chart_df = grp.groupby("หมวดหมู่")["คงเหลือ"].sum().sort_values(ascending=False).head(10)
-                st.bar_chart(chart_df)
+                if chart_type.startswith("แท่ง"):
+                    st.bar_chart(chart_df)
+                else:
+                    # Render pie via matplotlib
+                    import matplotlib.pyplot as plt
+                    fig, ax = plt.subplots()
+                    ax.pie(chart_df.values, labels=chart_df.index, autopct='%1.1f%%')
+                    ax.axis('equal')
+                    st.pyplot(fig)
             except Exception:
                 st.info("ไม่สามารถสร้างกราฟได้จากข้อมูลปัจจุบัน", icon="ℹ️")
-
     # Chart 2: IN/OUT ตามวัน 30 วันล่าสุด
     with c2:
         st.markdown("**ธุรกรรม IN/OUT ย้อนหลัง 30 วัน**")
@@ -733,6 +761,15 @@ def main():
     st.title(APP_TITLE); st.caption(APP_TAGLINE)
     # โหลดค่า sheet_url จากไฟล์คอนฟิก (ถ้าก่อนหน้าเคยทดสอบสำเร็จ)
     load_config_into_session()
+    # เชื่อมต่ออัตโนมัติถ้า URL มีอยู่แล้วและยังไม่ได้เชื่อมใน session
+    if st.session_state.get("sheet_url") and "sh" not in st.session_state:
+        try:
+            _sh = open_sheet_by_url(st.session_state.get("sheet_url"))
+            ensure_sheets_exist(_sh)
+            st.session_state["sh"] = _sh
+            st.session_state["connected"] = True
+        except Exception:
+            pass
 
     # Sidebar menu with icons
     with st.sidebar:
