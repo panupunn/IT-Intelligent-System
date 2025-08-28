@@ -236,12 +236,12 @@ def register_thai_fonts() -> dict:
                 continue
     return {"normal": None, "bold": None}
 
-def df_to_pdf_bytes(df, title="รายงาน", subtitle=""):
+def df_to_pdf_bytes(df, title="📑 รายงาน", subtitle=""):
     # Register Thai font (if available)
     f = register_thai_fonts()
     use_thai = f["normal"] is not None
     if not use_thai:
-        st.warning("⚠️ ไม่พบฟอนต์ไทยสำหรับ PDF (Sarabun / TH Sarabun New / Noto Sans Thai). โปรดวางไฟล์ .ttf ไว้ในโฟลเดอร์ ./fonts แล้วลองใหม่อีกครั้ง.", icon="⚠️")
+        st.warning(⚠️ ไม่พบฟอนต์ไทยสำหรับ PDF (Sarabun / TH Sarabun New / Noto Sans Thai). โปรดวางไฟล์ .ttf ไว้ในโฟลเดอร์ ./fonts แล้วลองใหม่อีกครั้ง.", icon="⚠️")
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -1418,8 +1418,8 @@ def main():
     if "sheet_url" not in st.session_state or not st.session_state.get("sheet_url"): st.session_state["sheet_url"] = DEFAULT_SHEET_URL
     with st.sidebar:
         st.markdown("---")
-        page = st.radio("เมนู", ["Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets)","เบิก/รับเข้า","รายงาน","ผู้ใช้","Settings"], index=0)
-    if page == "Settings":
+        page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets)","📥 เบิก/รับเข้า","📑 รายงาน","👥 ผู้ใช้","⚙️ Settings"], index=0)
+    if page == "⚙️ Settings":
         page_settings(); st.caption("© 2025 IT Stock · Streamlit + Google Sheets"); return
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
     if not sheet_url:
@@ -1430,12 +1430,12 @@ def main():
         st.error(f"เปิดชีตไม่สำเร็จ: {e}"); return
     ensure_sheets_exist(sh)
     auth_block(sh)
-    if page=="Dashboard": page_dashboard(sh)
+    if page=="📊 Dashboard": page_dashboard(sh)
     elif page=="📦 คลังอุปกรณ์": page_stock(sh)
     elif page=="🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets)": page_tickets(sh)
-    elif page=="เบิก/รับเข้า": page_issue_receive(sh)
-    elif page=="รายงาน": page_reports(sh)
-    elif page=="ผู้ใช้": page_users_admin(sh)
+    elif page=="📥 เบิก/รับเข้า": page_issue_receive(sh)
+    elif page=="📑 รายงาน": page_reports(sh)
+    elif page=="👥 ผู้ใช้": page_users_admin(sh)
     elif page=="นำเข้า/แก้ไข หมวดหมู่": page_import(sh)
     st.caption("© 2025 IT Stock · Streamlit + Google Sheets")
 
