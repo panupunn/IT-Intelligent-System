@@ -271,6 +271,7 @@ def render_import_box(df_upload, required_cols, rename_map=None):
     return df_upload
 
 # ---------- Pages ----------
+
 def page_dashboard(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("📊 Dashboard")
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
@@ -289,6 +290,43 @@ def page_dashboard(sh):
     st.metric("จำนวนอุปกรณ์", f"{total_items:,}")
     st.metric("ต่ำกว่า ROP", f"{low_rop:,}")
     st.metric("Tickets ทั้งหมด", f"{len(tickets):,}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---------- Charts ----------
+    c1, c2 = st.columns(2)
+
+    # Chart 1: ยอดคงเหลือต่อหมวดหมู่
+    with c1:
+        st.markdown("**คงเหลือรวมต่อหมวดหมู่**")
+        if items.empty:
+            st.info("ยังไม่มีข้อมูลคงเหลือ", icon="ℹ️")
+        else:
+            try:
+                grp = items.copy()
+                grp["คงเหลือ"] = pd.to_numeric(grp["คงเหลือ"], errors="coerce").fillna(0)
+                chart_df = grp.groupby("หมวดหมู่")["คงเหลือ"].sum().sort_values(ascending=False).head(10)
+                st.bar_chart(chart_df)
+            except Exception:
+                st.info("ไม่สามารถสร้างกราฟได้จากข้อมูลปัจจุบัน", icon="ℹ️")
+
+    # Chart 2: IN/OUT ตามวัน 30 วันล่าสุด
+    with c2:
+        st.markdown("**ธุรกรรม IN/OUT ย้อนหลัง 30 วัน**")
+        if txns.empty:
+            st.info("ยังไม่มีธุรกรรม", icon="ℹ️")
+        else:
+            try:
+                df = txns.copy()
+                df["วันเวลา"] = pd.to_datetime(df["วันเวลา"], errors="coerce")
+                df = df.dropna(subset=["วันเวลา"])
+                cutoff = pd.Timestamp.utcnow().tz_localize("UTC").tz_convert(TZ) - pd.Timedelta(days=30)
+                df = df[df["วันเวลา"] >= cutoff]
+                df["count"] = 1
+                pv = df.pivot_table(index=df["วันเวลา"].dt.date, columns="ประเภท", values="count", aggfunc="sum").fillna(0)
+                st.line_chart(pv)
+            except Exception:
+                st.info("ไม่สามารถสร้างกราฟได้จากข้อมูลปัจจุบัน", icon="ℹ️")
+
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -505,12 +543,18 @@ def page_issue_receive(sh):
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+
 def page_tickets(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets)")
     cats = read_df(sh, SHEET_TICKET_CATS, TICKET_CAT_HEADERS)
     tickets = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
 
-    tab1, tab2 = st.tabs(["สร้างคำขอ", "รายการทั้งหมด"])
+    # tabs: สร้าง/รายการ/หมวดหมู่ปัญหา (สำหรับ admin/staff)
+    if st.session_state.get("role","admin") in ("admin","staff"):
+        tab1, tab2, tab3 = st.tabs(["สร้างคำขอ", "รายการทั้งหมด", "หมวดหมู่ปัญหา"])
+    else:
+        tab1, tab2 = st.tabs(["สร้างคำขอ", "รายการทั้งหมด"])
+        tab3 = None
 
     with tab1:
         with st.form("tick_new", clear_on_submit=True):
@@ -550,6 +594,38 @@ def page_tickets(sh):
                     tickets.loc[tickets["TicketID"]==tid, ["สถานะ","ผู้รับผิดชอบ","อัปเดตล่าสุด","หมายเหตุ"]] = [st_new, assignee, datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"), note]
                     write_df(sh, SHEET_TICKETS, tickets); log_event(sh, get_username(), "TICKET_UPDATE", f"{tid} -> {st_new}")
                     st.success("อัปเดตแล้ว", icon="✅"); safe_rerun()
+
+    if tab3 is not None:
+        with tab3:
+            st.markdown("#### 🗂️ จัดการหมวดหมู่ปัญหา")
+            t1, t2 = st.tabs(["เพิ่ม/แก้ไข", "นำเข้า/แก้ไขแบบตาราง"])
+
+            with t1:
+                c1, c2 = st.columns([1,2])
+                code_in = c1.text_input("รหัสหมวดปัญหา").upper().strip()
+                name_in = c2.text_input("ชื่อหมวดปัญหา").strip()
+                if st.button("บันทึก/แก้ไข"):
+                    if not code_in or not name_in:
+                        st.warning("กรุณากรอกให้ครบ", icon="⚠️")
+                    else:
+                        base = read_df(sh, SHEET_TICKET_CATS, TICKET_CAT_HEADERS)
+                        if (base["รหัสหมวดปัญหา"] == code_in).any():
+                            base.loc[base["รหัสหมวดปัญหา"] == code_in, "ชื่อหมวดปัญหา"] = name_in; msg="อัปเดต"
+                        else:
+                            base = pd.concat([base, pd.DataFrame([[code_in, name_in]], columns=TICKET_CAT_HEADERS)], ignore_index=True); msg="เพิ่มใหม่"
+                        write_df(sh, SHEET_TICKET_CATS, base); log_event(sh, get_username(), "TICKET_CAT_SAVE", f"{msg}: {code_in}")
+                        st.success(f"{msg}เรียบร้อย", icon="✅"); safe_rerun()
+
+            with t2:
+                q = st.text_input("ค้นหา (รหัส/ชื่อ)", key="tkcat_search")
+                view = cats if not q else cats[cats.apply(lambda r: r.astype(str).str.contains(q, case=False).any(), axis=1)]
+                edited = st.data_editor(view.sort_values("รหัสหมวดปัญหา"), use_container_width=True, height=360, disabled=["รหัสหมวดปัญหา"])
+                if st.button("บันทึกการแก้ไข (หมวดปัญหา)"):
+                    base = read_df(sh, SHEET_TICKET_CATS, TICKET_CAT_HEADERS)
+                    for _, r in edited.iterrows():
+                        base.loc[base["รหัสหมวดปัญหา"] == str(r["รหัสหมวดปัญหา"]).strip().upper(), "ชื่อหมวดปัญหา"] = str(r["ชื่อหมวดปัญหา"]).strip()
+                    write_df(sh, SHEET_TICKET_CATS, base); log_event(sh, get_username(), "TICKET_CAT_EDIT_TABLE", f"{len(edited)} rows")
+                    st.success("บันทึกแล้ว", icon="✅"); safe_rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
