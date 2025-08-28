@@ -719,6 +719,84 @@ def group_period(df, period="ME"):
     dfx = df.copy(); dfx["วันเวลา"] = pd.to_datetime(dfx["วันเวลา"], errors='coerce'); dfx = dfx.dropna(subset=["วันเวลา"])
     return dfx.groupby([pd.Grouper(key="วันเวลา", freq=period), "ประเภท", "ชื่ออุปกรณ์"])['จำนวน'].sum().reset_index()
 
+
+def page_issue_out_multi5(sh):
+    """เบิก (OUT): เลือกสาขาก่อน แล้วกรอกได้ 5 รายการในครั้งเดียว"""
+    import pandas as pd
+    items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
+    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
+
+    if items.empty:
+        st.info("ยังไม่มีรายการอุปกรณ์", icon="ℹ️"); return
+
+    # 1) เลือกสาขา/หน่วยงานผู้ขอ (อยู่บรรทัดบนสุด)
+    bopt = st.selectbox("สาขา/หน่วยงานผู้ขอ", options=(branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [])
+    branch_code = bopt.split(" | ")[0] if bopt else ""
+
+    st.write("")
+    st.markdown("**เลือกรายการที่ต้องการเบิก (ได้สูงสุด 5 รายการต่อครั้ง)**")
+
+    # เตรียม options แสดงคงเหลือ
+    opts = []
+    for _, r in items.iterrows():
+        remain = int(pd.to_numeric(r["คงเหลือ"], errors="coerce") or 0)
+        opts.append(f'{r["รหัส"]} | {r["ชื่ออุปกรณ์"]} (คงเหลือ {remain})')
+
+    df_template = pd.DataFrame({"รายการ": ["", "", "", "", ""], "จำนวน": [1, 1, 1, 1, 1]})
+    ed = st.data_editor(
+        df_template,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        column_config={
+            "รายการ": st.column_config.SelectboxColumn(options=opts, required=False),
+            "จำนวน": st.column_config.NumberColumn(min_value=1, step=1)
+        },
+        key="issue_out_multi5",
+    )
+
+    note = st.text_input("หมายเหตุ (ถ้ามี)", value="")
+
+    if st.button("บันทึกการเบิก (1 ครั้ง/หลายรายการ)", type="primary", disabled=(not branch_code)):
+        txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
+        errors = []
+        processed = 0
+        items_local = items.copy()
+
+        for _, r in ed.iterrows():
+            sel = str(r.get("รายการ","") or "").strip()
+            qty = int(pd.to_numeric(r.get("จำนวน", 0), errors="coerce") or 0)
+            if not sel or qty <= 0:
+                continue
+
+            code_sel = sel.split(" | ")[0]
+            row_sel = items_local[items_local["รหัส"]==code_sel]
+            if row_sel.empty:
+                errors.append(f"{code_sel}: ไม่พบในคลัง")
+                continue
+            row_sel = row_sel.iloc[0]
+            remain = int(pd.to_numeric(row_sel["คงเหลือ"], errors="coerce") or 0)
+            if qty > remain:
+                errors.append(f"{code_sel}: เกินคงเหลือ ({remain})")
+                continue
+
+            new_remain = remain - qty
+            items_local.loc[items_local["รหัส"]==code_sel, "คงเหลือ"] = str(new_remain)
+
+            from datetime import datetime
+            txn = [str(uuid.uuid4())[:8], datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"),
+                   "OUT", code_sel, row_sel["ชื่ออุปกรณ์"], branch_code, str(qty), get_username(), note]
+            txns = pd.concat([txns, pd.DataFrame([txn], columns=TXNS_HEADERS)], ignore_index=True)
+            processed += 1
+
+        if processed > 0:
+            write_df(sh, SHEET_ITEMS, items_local)
+            write_df(sh, SHEET_TXNS, txns)
+            st.success(f"บันทึกการเบิกแล้ว {processed} รายการ", icon="✅")
+            st.rerun()
+        else:
+            st.warning("ยังไม่มีบรรทัดที่สมบูรณ์ให้บันทึก", icon="⚠️")
+
 def page_issue_receive(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("🧾 เบิก/รับเข้า")
     if st.session_state.get("role") not in ("admin","staff"): st.info("สิทธิ์ผู้ชมไม่สามารถบันทึกรายการได้"); st.markdown("</div>", unsafe_allow_html=True); return
@@ -727,32 +805,7 @@ def page_issue_receive(sh):
     t1,t2 = st.tabs(["เบิก (OUT)","รับเข้า (IN)"])
 
     with t1:
-        with st.form("issue", clear_on_submit=True):
-            c1,c2 = st.columns([2,1])
-            with c1: item = st.selectbox("เลือกอุปกรณ์", options=items["รหัส"]+" | "+items["ชื่ออุปกรณ์"])
-            with c2: qty = st.number_input("จำนวนที่เบิก", min_value=1, value=1, step=1)
-            if branches.empty:
-                branch_sel = st.text_input("สาขา/หน่วยงานผู้ขอ (ยังไม่มีรายการสาขา ให้พิมพ์เองหรือ นำเข้า/แก้ไข หมวดหมู่)")
-            else:
-                br_opts = (branches["รหัสสาขา"] + " | " + branches["ชื่อสาขา"]).tolist() + ["พิมพ์เอง"]
-                br_pick = st.selectbox("สาขา/หน่วยงานผู้ขอ", options=br_opts)
-                branch_sel = st.text_input("ถ้าพิมพ์เอง ใส่ที่นี่", value="" if br_pick!="พิมพ์เอง" else "")
-                if br_pick!="พิมพ์เอง": branch_sel = br_pick
-            note = st.text_input("หมายเหตุ", placeholder="เช่น งานซ่อมเครื่องพิมพ์")
-            st.markdown("**วัน-เวลาการเบิก**")
-            manual = st.checkbox("กำหนดวันเวลาเอง", value=False)
-            if manual:
-                d = st.date_input("วันที่", value=datetime.now(TZ).date(), key="out_d")
-                t = st.time_input("เวลา", value=datetime.now(TZ).time().replace(microsecond=0), key="out_t")
-                ts_str = fmt_dt(combine_date_time(d, t))
-            else:
-                ts_str = None
-            s = st.form_submit_button("บันทึกการเบิก", use_container_width=True)
-        if s:
-            code = item.split(" | ")[0]
-            ok = adjust_stock(sh, code, -qty, st.session_state.get("user","unknown"), branch_sel, note, "OUT", ts_str=ts_str)
-            if ok: st.success("บันทึกแล้ว"); safe_rerun()
-
+        page_issue_out_multi5(sh)
     with t2:
         with st.form("recv", clear_on_submit=True):
             c1,c2 = st.columns([2,1])
