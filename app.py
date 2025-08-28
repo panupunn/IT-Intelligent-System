@@ -267,7 +267,7 @@ def df_to_pdf_bytes(df, title="📑 รายงาน", subtitle=""):
     f = register_thai_fonts()
     use_thai = f["normal"] is not None
     if not use_thai:
-        st.warning("ไม่พบฟอนต์ไทยสำหรับ PDF (Sarabun / TH Sarabun New / Noto Sans Thai). โปรดวางไฟล์ .ttf ไว้ในโฟลเดอร์ ./fonts แล้วลองใหม่อีกครั้ง.", icon=⚠️")
+        st.warning("ไม่พบฟอนต์ไทยสำหรับ PDF (Sarabun / TH Sarabun New / Noto Sans Thai). โปรดวางไฟล์ .ttf ไว้ในโฟลเดอร์ ./fonts แล้วลองใหม่อีกครั้ง.", icon="⚠️")
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
