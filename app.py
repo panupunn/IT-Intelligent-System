@@ -13,7 +13,46 @@ v11:
 import os, io, uuid, re
 from datetime import datetime, timedelta, date, time as dtime
 import pytz, pandas as pd, streamlit as st
-from branch_display_helpers import ensure_branch_display
+
+try:
+    # Prefer external helper if present alongside the app
+    from branch_display_helpers import ensure_branch_display  # type: ignore
+except Exception:
+    # Fallback: lightweight inline helper to always display "CODE | NAME" when possible
+    def ensure_branch_display(df, sh=None, extras=None, new_col=True, new_col_name="สาขาแสดง"):
+        import pandas as pd
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty or ("สาขา" not in df.columns):
+            return df.copy() if isinstance(df, pd.DataFrame) else df
+        # Build mapping from existing "CODE | NAME" values in the dataframe itself
+        mapping = {}
+        try:
+            uniq = df["สาขา"].dropna().astype(str).unique().tolist()
+            for s in uniq:
+                parts = [p.strip() for p in s.split("|", 1)]
+                code = parts[0]
+                name = parts[1] if len(parts) > 1 else None
+                if code and name:
+                    mapping[code] = name
+        except Exception:
+            pass
+        if extras:
+            try:
+                mapping.update(extras)
+            except Exception:
+                pass
+        def _fmt(v):
+            s = "" if v is None else str(v)
+            parts = [p.strip() for p in s.split("|", 1)]
+            code = parts[0] if parts else ""
+            name = parts[1] if len(parts) > 1 else mapping.get(code)
+            return f"{code} | {name}" if (code and name) else code
+        out = df.copy()
+        if new_col:
+            out[new_col_name] = out["สาขา"].apply(_fmt)
+        else:
+            out["สาขา"] = out["สาขา"].apply(_fmt)
+        return out
+
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
