@@ -682,6 +682,161 @@ def page_tickets(sh):
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+
+def render_categories_admin(sh):
+    """UI จัดการหมวดหมู่ (Categories) สำหรับแอดมิน/สตาฟ
+    - เพิ่ม/แก้ไข 1 รายการ
+    - นำเข้าไฟล์หลายรายการ CSV/Excel
+    - ค้นหา/แก้ไขแบบตาราง + ลบ (มีการป้องกันเมื่อถูกใช้งานใน Items)
+    """
+    st.markdown("#### 🏷️ จัดการหมวดหมู่")
+    cats = read_df(sh, SHEET_CATS, CATS_HEADERS)
+
+    tab1, tab2, tab3 = st.tabs(["✏️ เพิ่ม/แก้ไข 1 รายการ", "📥 นำเข้าไฟล์ (หลายรายการ)", "🔎 ค้นหา/แก้ไข/ลบ (ตาราง)"])
+
+    # ---- TAB 1: Single add/update ----
+    with tab1:
+        c1, c2 = st.columns([1,2])
+        with c1:
+            code_in = st.text_input("รหัสหมวด", placeholder="เช่น PRT, KBD").upper().strip()
+        with c2:
+            name_in = st.text_input("ชื่อหมวด", placeholder="เช่น หมึกพิมพ์, คีย์บอร์ด").strip()
+        if st.button("💾 บันทึก/แก้ไข 1 รายการ", use_container_width=True, key="cat_save_single"):
+            if not code_in or not name_in:
+                st.warning("กรุณากรอกรหัสและชื่อหมวดให้ครบ")
+            else:
+                df = read_df(sh, SHEET_CATS, CATS_HEADERS)
+                if (df["รหัสหมวด"] == code_in).any():
+                    df.loc[df["รหัสหมวด"] == code_in, "ชื่อหมวด"] = name_in
+                    msg = "อัปเดต"
+                else:
+                    df = pd.concat([df, pd.DataFrame([[code_in, name_in]], columns=CATS_HEADERS)], ignore_index=True)
+                    msg = "เพิ่มใหม่"
+                write_df(sh, SHEET_CATS, df); st.success(f"{msg}เรียบร้อย: {code_in} — {name_in}"); safe_rerun()
+
+    # ---- TAB 2: Import many ----
+    with tab2:
+        with st.expander("วิธีใช้งาน/เทมเพลต (คลิกเพื่อดู)", expanded=False):
+            st.markdown("""\
+- รองรับไฟล์ .csv หรือ .xlsx ที่มีคอลัมน์ **รหัสหมวด, ชื่อหมวด**
+- ระบบจะ **อัปเดตชื่อหมวด** หากพบรหัสซ้ำ และ **เพิ่มใหม่** เมื่อไม่พบรหัสเดิม
+- ไม่ลบรายการเดิมโดยอัตโนมัติ เว้นแต่เลือกโหมด 'แทนที่ทั้งชีต'
+            """)
+            tpl = """รหัสหมวด,ชื่อหมวด
+PRT,หมึกพิมพ์
+KBD,คีย์บอร์ด
+"""
+            st.download_button("ดาวน์โหลดเทมเพลต (CSV)", data=tpl.encode("utf-8-sig"),
+                               file_name="template_categories.csv", mime="text/csv")
+
+        cA, cB = st.columns([2,1])
+        with cA:
+            up = st.file_uploader("เลือกไฟล์ (.csv, .xlsx)", type=["csv","xlsx","xls"], key="cat_uploader_stocktab")
+        with cB:
+            replace_all = st.checkbox("แทนที่ทั้งชีต (ล้างและใส่ใหม่)", value=False)
+
+        if up is not None:
+            try:
+                if up.name.lower().endswith(".csv"):
+                    df_up = pd.read_csv(up, dtype=str)
+                else:
+                    df_up = pd.read_excel(up, dtype=str)
+                df_up = df_up.fillna("").applymap(lambda x: str(x).strip())
+            except Exception as e:
+                st.error(f"อ่านไฟล์ไม่สำเร็จ: {e}"); return
+
+            rename_map = {"รหัสหมวดหมู่":"รหัสหมวด","ชื่อหมวดหมู่":"ชื่อหมวด","code":"รหัสหมวด","name":"ชื่อหมวด","category_code":"รหัสหมวด","category_name":"ชื่อหมวด"}
+            df_up.columns = [rename_map.get(c.strip(), c.strip()) for c in df_up.columns]
+            missing = [c for c in ["รหัสหมวด","ชื่อหมวด"] if c not in df_up.columns]
+            if missing:
+                st.error(f"ไฟล์ขาดคอลัมน์ที่บังคับ: {', '.join(missing)}"); return
+
+            df_up["รหัสหมวด"] = df_up["รหัสหมวด"].str.upper()
+            df_up = df_up[df_up["รหัสหมวด"]!=""]
+            df_up = df_up.drop_duplicates(subset=["รหัสหมวด"], keep="last")
+
+            st.success(f"พรีวิว {len(df_up):,} รายการ")
+            st.dataframe(df_up, use_container_width=True, height=240)
+
+            if st.button("🚀 ดำเนินการนำเข้า/อัปเดต", use_container_width=True, key="cat_do_import_stocktab"):
+                base = read_df(sh, SHEET_CATS, CATS_HEADERS)
+                if replace_all:
+                    # ก่อนแทนที่ทั้งชีต ให้ตรวจว่ามีการอ้างอิงใน Items หรือไม่
+                    items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
+                    used_cats = set(items["หมวดหมู่"].tolist()) if not items.empty else set()
+                    new_cats = set(df_up["รหัสหมวด"].tolist())
+                    if used_cats - new_cats:
+                        st.error("ไม่สามารถแทนที่ทั้งชีตได้: มีรหัสหมวดที่ถูกใช้งานใน Items แต่ไม่อยู่ในไฟล์ใหม่นี้"); return
+                    write_df(sh, SHEET_CATS, df_up[CATS_HEADERS]); st.success(f"แทนที่ทั้งชีตสำเร็จ • บันทึก {len(df_up):,} รายการ"); safe_rerun()
+                else:
+                    added, updated = 0, 0
+                    for _, r in df_up.iterrows():
+                        cd, nm = str(r["รหัสหมวด"]).strip().upper(), str(r["ชื่อหมวด"]).strip()
+                        if not cd or not nm: 
+                            continue
+                        if (base["รหัสหมวด"] == cd).any():
+                            base.loc[base["รหัสหมวด"] == cd, "ชื่อหมวด"] = nm; updated += 1
+                        else:
+                            base = pd.concat([base, pd.DataFrame([[cd, nm]], columns=CATS_HEADERS)], ignore_index=True); added += 1
+                    write_df(sh, SHEET_CATS, base); st.success(f"นำเข้าสำเร็จ • เพิ่มใหม่ {added:,} • อัปเดต {updated:,}"); safe_rerun()
+
+    # ---- TAB 3: Search / inline edit / delete with protection ----
+    with tab3:
+        c1, c2 = st.columns([2,1])
+        with c1:
+            q = st.text_input("ค้นหา (รหัส/ชื่อ)", key="cat_search_stocktab")
+        with c2:
+            st.caption("แก้ไขค่าในตารางได้โดยตรง และสามารถลบหมวดที่ไม่ได้ใช้งาน")
+
+        view = cats.copy()
+        if not view.empty and q:
+            mask = view["รหัสหมวด"].str.contains(q, case=False, na=False) | view["ชื่อหมวด"].str.contains(q, case=False, na=False)
+            view = view[mask]
+
+        edited = st.data_editor(
+            view.sort_values("รหัสหมวด"),
+            use_container_width=True,
+            height=360,
+            disabled=["รหัสหมวด"],
+            key="cat_editor_stocktab"
+        )
+
+        cL, cM, cR = st.columns([1,1,1])
+        with cL:
+            if st.button("💾 บันทึกการแก้ไข", use_container_width=True, key="cat_save_table_stocktab"):
+                base = read_df(sh, SHEET_CATS, CATS_HEADERS)
+                for _, r in edited.iterrows():
+                    base.loc[base["รหัสหมวด"] == str(r["รหัสหมวด"]).strip().upper(), "ชื่อหมวด"] = str(r["ชื่อหมวด"]).strip()
+                write_df(sh, SHEET_CATS, base); st.success("บันทึกการแก้ไขเรียบร้อย"); safe_rerun()
+        with cM:
+            # Quick add
+            with st.popover("➕ เพิ่มใหม่"):
+                q_code = st.text_input("รหัสหมวด (ใหม่)", key="cat_quick_code_stocktab").upper().strip()
+                q_name = st.text_input("ชื่อหมวด", key="cat_quick_name_stocktab").strip()
+                if st.button("เพิ่ม", key="cat_quick_add_stocktab"):
+                    if not q_code or not q_name:
+                        st.warning("กรุณากรอกให้ครบ")
+                    else:
+                        base = read_df(sh, SHEET_CATS, CATS_HEADERS)
+                        if (base["รหัสหมวด"] == q_code).any():
+                            st.error("รหัสนี้มีอยู่แล้ว"); st.stop()
+                        base = pd.concat([base, pd.DataFrame([[q_code, q_name]], columns=CATS_HEADERS)], ignore_index=True)
+                        write_df(sh, SHEET_CATS, base); st.success("เพิ่มใหม่แล้ว"); safe_rerun()
+        with cR:
+            # Delete selection with protection
+            base = read_df(sh, SHEET_CATS, CATS_HEADERS)
+            opts = (base["รหัสหมวด"]+" | "+base["ชื่อหมวด"]).tolist() if not base.empty else []
+            del_sel = st.multiselect("เลือกรายการที่จะลบ (เฉพาะหมวดที่ไม่ถูกใช้งาน)", options=opts, key="cat_del_sel_stocktab")
+            if st.button("🗑️ ลบที่เลือก", type="secondary", use_container_width=True, key="cat_do_delete_stocktab"):
+                items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
+                used = set(items["หมวดหมู่"].tolist()) if not items.empty else set()
+                to_del_codes = {x.split(" | ")[0] for x in del_sel}
+                blocked = sorted(list(used.intersection(to_del_codes)))
+                if blocked:
+                    st.error("ไม่สามารถลบได้ เพราะหมวดต่อไปนี้ถูกใช้งานใน Items: " + ", ".join(blocked))
+                else:
+                    base = base[~base["รหัสหมวด"].isin(list(to_del_codes))]
+                    write_df(sh, SHEET_CATS, base); st.success(f"ลบแล้ว {len(to_del_codes):,} รายการ"); safe_rerun()
 def page_stock(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("📦 คลังอุปกรณ์")
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS); cats  = read_df(sh, SHEET_CATS, CATS_HEADERS)
@@ -696,7 +851,10 @@ def page_stock(sh):
     loc_opts  = get_loc_options(items)
 
     if st.session_state.get("role") in ("admin","staff"):
-        t_add, t_edit = st.tabs(["➕ เพิ่ม/อัปเดต (รหัสใหม่)","✏️ แก้ไข/ลบ (เลือกรายการเดิม)"])
+        t_add, t_edit, t_cat = st.tabs(["➕ เพิ่ม/อัปเดต (รหัสใหม่)","✏️ แก้ไข/ลบ (เลือกรายการเดิม)","🏷️ หมวดหมู่"])
+
+        with t_cat:
+            render_categories_admin(sh)
 
         with t_add:
             with st.form("item_add", clear_on_submit=True):
@@ -1260,7 +1418,7 @@ def main():
     if "sheet_url" not in st.session_state or not st.session_state.get("sheet_url"): st.session_state["sheet_url"] = DEFAULT_SHEET_URL
     with st.sidebar:
         st.markdown("---")
-        page = st.radio("เมนู", ["Dashboard","Stock","แจ้งปัญหา","เบิก/รับเข้า","รายงาน","ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","Settings"], index=0)
+        page = st.radio("เมนู", ["Dashboard","Stock","แจ้งปัญหา","เบิก/รับเข้า","รายงาน","ผู้ใช้","Settings"], index=0)
     if page == "Settings":
         page_settings(); st.caption("© 2025 IT Stock · Streamlit + Google Sheets"); return
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
