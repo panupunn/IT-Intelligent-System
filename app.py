@@ -28,7 +28,7 @@ TICKETS_HEADERS=["TicketID","วันที่แจ้ง","สาขา","ผ
 USERS_HEADERS = ["username","password","display_name","role","active"]
 
 def add_reload_button():
-    st.button("🔁 รีโหลดข้อมูล", on_click=lambda: (st.cache_data.clear(), st.experimental_rerun()))
+    st.button("🔁 รีโหลดข้อมูล", on_click=lambda: (st.cache_data.clear(), st.rerun()))
 
 def load_config_into_session():
     cfg = {}
@@ -192,7 +192,7 @@ def require_login():
         if user:
             st.session_state.update({"logged_in":True,"username":user["username"],
                                      "display_name":user["display_name"],"role":user.get("role","staff")})
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error("เข้าสู่ระบบไม่สำเร็จ: ผู้ใช้/รหัสผ่านไม่ถูกต้อง หรือถูกปิดใช้งาน", icon="❌")
     return False
