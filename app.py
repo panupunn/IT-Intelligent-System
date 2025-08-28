@@ -19,6 +19,9 @@ SHEET_TICKETS = "Tickets"
 SHEET_TICKET_CATS = "TicketCategories"
 SHEET_AUDIT   = "AuditLog"
 
+SHEET_USERS  = "Users"
+USERS_HEADERS = ["username","password","display_name","role","active"]
+
 ITEMS_HEADERS = ["รหัส","รหัสหมวด","ชื่ออุปกรณ์","หน่วย","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ","ใช้งาน"]
 CATS_HEADERS  = ["รหัสหมวด","ชื่อหมวด"]
 BR_HEADERS    = ["รหัสสาขา","ชื่อสาขา"]
@@ -115,6 +118,7 @@ def ensure_sheets_exist(sh):
         SHEET_TXNS: TXNS_HEADERS,
         SHEET_TICKETS: TICKETS_HEADERS,
         SHEET_TICKET_CATS: ["รหัสหมวดปัญหา","ชื่อหมวดปัญหา"],
+        SHEET_USERS: USERS_HEADERS,
         SHEET_AUDIT: ["เวลา","ผู้ใช้","เหตุการณ์","รายละเอียด"]
     }
     titles = [ws.title for ws in sh.worksheets()]
@@ -160,6 +164,11 @@ def write_df(sh, title, df):
     ws.update(values, value_input_option="USER_ENTERED")
 
 # ---------- UI Helpers ----------
+
+def _truthy(x):
+    s = str(x).strip().lower()
+    return s in ("y","yes","true","1","ใช่")
+
 def add_reload_button():
     st.button("🔁 รีโหลดข้อมูล", on_click=lambda: (st.cache_data.clear(), st.toast("รีโหลดแล้ว", icon="🔁")))
 
@@ -168,9 +177,53 @@ def record_recent(key: str, row: list, headers: list):
     new = pd.DataFrame([row], columns=headers)
     st.session_state[f"recent_{key}"] = new if df is None else pd.concat([df, new], ignore_index=True).tail(10)
 
+
+def load_users_df(sh):
+    try:
+        return read_df(sh, SHEET_USERS, USERS_HEADERS)
+    except Exception:
+        return pd.DataFrame(columns=USERS_HEADERS)
+
+def authenticate_with_sheet(sh, username, password):
+    users = load_users_df(sh)
+    if users.empty:
+        # allow login if no user sheet yet
+        return {"username": username, "role": "admin", "display_name": username}
+    row = users[users["username"].str.lower()==username.lower()]
+    if row.empty:
+        return None
+    row = row.iloc[0]
+    # password optional
+    if "password" in row and str(row["password"]).strip():
+        if str(row["password"]) != str(password):
+            return None
+    if "active" in row and not _truthy(row["active"] if pd.notna(row["active"]) else "y"):
+        return None
+    role = row["role"] if pd.notna(row.get("role","")) else "staff"
+    disp = row["display_name"] if pd.notna(row.get("display_name","")) else username
+    return {"username": username, "role": role, "display_name": disp}
+
+
 def require_login():
     if st.session_state.get("logged_in"):
         return True
+    st.title("เข้าสู่ระบบ")
+    c1,c2 = st.columns(2)
+    u = c1.text_input("ชื่อผู้ใช้")
+    p = c2.text_input("รหัสผ่าน (ถ้ามี)", type="password")
+    if st.button("เข้าสู่ระบบ"):
+        sh = _connect_if_needed()
+        user = authenticate_with_sheet(sh, u, p) if u.strip() else None
+        if user:
+            st.session_state["logged_in"]=True
+            st.session_state["username"]=user["username"]
+            st.session_state["role"]=user.get("role","staff")
+            st.session_state["display_name"]=user.get("display_name", u)
+            st.session_state.setdefault("recent_items", None); st.session_state.setdefault("recent_txns", None); st.session_state.setdefault("recent_tickets", None)
+            st.experimental_rerun()
+        else:
+            st.error("เข้าสู่ระบบไม่สำเร็จ: ผู้ใช้/รหัสผ่านไม่ถูกต้อง หรือถูกปิดใช้งาน", icon="❌")
+    return False
     st.title("เข้าสู่ระบบ")
     u = st.text_input("ชื่อผู้ใช้", key="login_user")
     if st.button("เข้าสู่ระบบ"):
@@ -221,7 +274,7 @@ def page_dashboard(sh):
             df = txns.copy()
             df["วันเวลา"]=pd.to_datetime(df["วันเวลา"], errors="coerce")
             df = df.dropna(subset=["วันเวลา"])
-            cutoff = datetime.now(TZ) - timedelta(days=30)
+            cutoff = pd.Timestamp.now() - pd.Timedelta(days=30)
             df = df[df["วันเวลา"]>=cutoff]
             df["count"]=1
             pv=df.pivot_table(index=df["วันเวลา"].dt.date, columns="ประเภท", values="count", aggfunc="sum").fillna(0)
@@ -312,64 +365,86 @@ def page_stock(sh):
     with t3:
         render_categories_admin(sh)
 
+
 def page_issue_receive(sh):
     add_reload_button()
     st.subheader("📥 เบิก/รับเข้า")
+
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
     branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
     if items.empty:
         st.info("ยังไม่มีรายการอุปกรณ์", icon="ℹ️"); return
+
     t1,t2 = st.tabs(["เบิก (OUT)","รับเข้า (IN)"])
 
+    # ---------- OUT (multi rows) ----------
     with t1:
-        with st.form("issue", clear_on_submit=True):
-            pick = st.selectbox("เลือกรายการ", options=(items["รหัส"]+" | "+items["ชื่ออุปกรณ์"]).tolist())
-            bopt = st.selectbox("เลือกสาขาที่เบิก", options=(branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [])
-            qty  = st.number_input("จำนวนที่เบิก", min_value=1, value=1, step=1)
-            by   = st.text_input("ผู้ดำเนินการ", value=get_username())
-            note = st.text_input("หมายเหตุ", value="")
-            s = st.form_submit_button("บันทึกการเบิก")
-        if s:
-            code_sel = pick.split(" | ")[0]
-            row = items[items["รหัส"]==code_sel].iloc[0]
-            cur = int(float(row["คงเหลือ"] or 0))
-            if qty>cur: st.error("สต็อกไม่พอ", icon="⚠️")
+        branch = st.selectbox("เลือกสาขาที่เบิก", options=(branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [])
+        if not branch and not branches.empty:
+            st.warning("โปรดเลือกสาขาก่อน", icon="⚠️")
+        df = items.copy()
+        df = df[["รหัส","ชื่ออุปกรณ์","คงเหลือ"]].copy()
+        df["คงเหลือ"] = pd.to_numeric(df["คงเหลือ"], errors="coerce").fillna(0).astype(int)
+        df["จำนวนที่เบิก"] = 0
+        st.caption("ระบุจำนวนที่ต้องการเบิกในคอลัมน์ 'จำนวนที่เบิก' (หลายรายการได้)")
+        ed = st.data_editor(df, use_container_width=True, num_rows="dynamic",
+                            column_config={"จำนวนที่เบิก": st.column_config.NumberColumn(min_value=0, step=1)},
+                            hide_index=True, key="out_table")
+        if st.button("บันทึกการเบิก (หลายรายการ)") and branch:
+            sel = ed[ed["จำนวนที่เบิก"].astype(int) > 0]
+            if sel.empty:
+                st.warning("ยังไม่ได้ระบุจำนวนในรายการใดเลย", icon="⚠️")
             else:
-                items.loc[items["รหัส"]==code_sel,"คงเหลือ"]=str(cur-qty); write_df(sh, SHEET_ITEMS, items)
                 txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
-                branch_code = bopt.split(" | ")[0] if bopt else ""
-                new_txn = [str(uuid.uuid4())[:8], datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"), "OUT", code_sel, row["ชื่ออุปกรณ์"], branch_code, str(qty), by, note]
-                txns = pd.concat([txns, pd.DataFrame([new_txn], columns=TXNS_HEADERS)], ignore_index=True)
-                write_df(sh, SHEET_TXNS, txns); log_event(sh, get_username(), "ISSUE", f"{code_sel} x {qty} @ {branch_code}")
-                st.success("บันทึกแล้ว", icon="✅")
-                record_recent("txns", new_txn, TXNS_HEADERS)
-                st.markdown("#### รายการที่บันทึกล่าสุด")
+                branch_code = branch.split(" | ")[0]
+                error_rows = []
+                for _, r in sel.iterrows():
+                    code_sel = r["รหัส"]; qty = int(r["จำนวนที่เบิก"]); avail = int(r["คงเหลือ"])
+                    if qty > avail:
+                        error_rows.append(code_sel); continue
+                    # update stock
+                    items.loc[items["รหัส"]==code_sel, "คงเหลือ"] = str(avail - qty)
+                    # add txn
+                    new_txn = [str(uuid.uuid4())[:8], datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"), "OUT", code_sel, r["ชื่ออุปกรณ์"], branch_code, str(qty), get_username(), ""]
+                    txns = pd.concat([txns, pd.DataFrame([new_txn], columns=TXNS_HEADERS)], ignore_index=True)
+                    record_recent("txns", new_txn, TXNS_HEADERS)
+                write_df(sh, SHEET_ITEMS, items); write_df(sh, SHEET_TXNS, txns)
+                if error_rows:
+                    st.warning("มีบางรายการสต็อกไม่พอ: " + ", ".join(error_rows), icon="⚠️")
+                st.success("บันทึกการเบิกแล้ว", icon="✅")
                 st.dataframe(st.session_state.get("recent_txns"), use_container_width=True, height=160)
 
+    # ---------- IN (multi rows) ----------
     with t2:
-        with st.form("receive", clear_on_submit=True):
-            pick = st.selectbox("เลือกรายการ", options=(items["รหัส"]+" | "+items["ชื่ออุปกรณ์"]).tolist(), key="recvpick")
-            bopt = st.selectbox("เลือกสาขาที่รับเข้า", options=(branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [], key="recvbranch")
-            qty  = st.number_input("จำนวนที่รับเข้า", min_value=1, value=1, step=1, key="recvqty")
-            by   = st.text_input("ผู้ดำเนินการ", value=get_username(), key="recvby")
-            note = st.text_input("หมายเหตุ", value="", key="recvnote")
-            s = st.form_submit_button("บันทึกรับเข้า")
-        if s:
-            code_sel = pick.split(" | ")[0]
-            row = items[items["รหัส"]==code_sel].iloc[0]
-            cur = int(float(row["คงเหลือ"] or 0))
-            items.loc[items["รหัส"]==code_sel,"คงเหลือ"]=str(cur+qty); write_df(sh, SHEET_ITEMS, items)
-            txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
-            branch_code = bopt.split(" | ")[0] if bopt else ""
-            new_txn = [str(uuid.uuid4())[:8], datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"), "IN", code_sel, row["ชื่ออุปกรณ์"], branch_code, str(qty), by, note]
-            txns = pd.concat([txns, pd.DataFrame([new_txn], columns=TXNS_HEADERS)], ignore_index=True)
-            write_df(sh, SHEET_TXNS, txns); log_event(sh, get_username(), "RECEIVE", f"{code_sel} x {qty} @ {branch_code}")
-            st.success("บันทึกรับเข้าแล้ว", icon="✅")
-            record_recent("txns", new_txn, TXNS_HEADERS)
-            st.markdown("#### รายการที่บันทึกล่าสุด")
-            st.dataframe(st.session_state.get("recent_txns"), use_container_width=True, height=160)
+        branch = st.selectbox("เลือกสาขาที่รับเข้า", options=(branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [], key="in_branch")
+        df = items.copy()
+        df = df[["รหัส","ชื่ออุปกรณ์","คงเหลือ"]].copy()
+        df["คงเหลือ"] = pd.to_numeric(df["คงเหลือ"], errors="coerce").fillna(0).astype(int)
+        df["จำนวนที่รับเข้า"] = 0
+        st.caption("ระบุจำนวนที่รับเข้าในคอลัมน์ 'จำนวนที่รับเข้า' (หลายรายการได้)")
+        ed = st.data_editor(df, use_container_width=True, num_rows="dynamic",
+                            column_config={"จำนวนที่รับเข้า": st.column_config.NumberColumn(min_value=0, step=1)},
+                            hide_index=True, key="in_table")
+        if st.button("บันทึกรับเข้า (หลายรายการ)") and branch:
+            sel = ed[ed["จำนวนที่รับเข้า"].astype(int) > 0]
+            if sel.empty:
+                st.warning("ยังไม่ได้ระบุจำนวนในรายการใดเลย", icon="⚠️")
+            else:
+                txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
+                branch_code = branch.split(" | ")[0]
+                for _, r in sel.iterrows():
+                    code_sel = r["รหัส"]; qty = int(r["จำนวนที่รับเข้า"]); avail = int(r["คงเหลือ"])
+                    # update stock
+                    items.loc[items["รหัส"]==code_sel, "คงเหลือ"] = str(avail + qty)
+                    # add txn
+                    new_txn = [str(uuid.uuid4())[:8], datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"), "IN", code_sel, r["ชื่ออุปกรณ์"], branch_code, str(qty), get_username(), ""]
+                    txns = pd.concat([txns, pd.DataFrame([new_txn], columns=TXNS_HEADERS)], ignore_index=True)
+                    record_recent("txns", new_txn, TXNS_HEADERS)
+                write_df(sh, SHEET_ITEMS, items); write_df(sh, SHEET_TXNS, txns)
+                st.success("บันทึกรับเข้าแล้ว", icon="✅")
+                st.dataframe(st.session_state.get("recent_txns"), use_container_width=True, height=160)
 
-def page_tickets(sh):
+def page_tickets(sh):  # keep following definitions intact
     add_reload_button()
     st.subheader("🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets)")
     cats = read_df(sh, SHEET_TICKET_CATS, ["รหัสหมวดปัญหา","ชื่อหมวดปัญหา"])
@@ -535,7 +610,9 @@ def page_settings(sh):
 def main():
     st.set_page_config(page_title="IT Intelligent System", layout="wide")
     load_config_into_session()
-    require_login()
+    ok = require_login()
+    if not ok:
+        return
     sh = _connect_if_needed()
     st.sidebar.title("เมนู")
     if not st.session_state.get("sh"):
