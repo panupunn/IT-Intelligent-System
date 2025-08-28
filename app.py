@@ -26,6 +26,38 @@ import altair as alt
 # ---- Compatibility helper for Streamlit rerun ----
 def safe_rerun():
     import streamlit as st
+
+# ----------------- Global UI Style -----------------
+def inject_global_css():
+    import streamlit as st
+    st.markdown(
+        """
+        <style>
+        html, body, [class*="css"]  {
+            font-size: 14px !important;
+        }
+        /* Responsive adjustments for small screens */
+        @media (max-width: 768px) {
+            html, body, [class*="css"] {
+                font-size: 13px !important;
+            }
+            h1 { font-size: 1.5rem !important; }
+            h2 { font-size: 1.3rem !important; }
+            h3 { font-size: 1.1rem !important; }
+            .stButton>button {
+                padding: 0.25rem 0.75rem;
+                font-size: 0.9rem;
+            }
+            .stTextInput>div>div>input, .stTextArea>div>textarea {
+                font-size: 0.9rem !important;
+            }
+            .stDataFrame { font-size: 0.85rem !important; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
     if hasattr(st, "rerun"):
         st.rerun()
     elif hasattr(st, "experimental_rerun"):
@@ -64,6 +96,33 @@ section.main > div { padding-top: 8px; }
 .kpi { display:grid; grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
 .danger { color:#b00020; }
 </style>"""
+
+RESPONSIVE_CSS = """
+<style>
+/* Base font sizing */
+html, body, [data-testid="stAppViewContainer"] { font-size: 15px; }
+
+/* Tablet and below */
+@media (max-width: 768px){
+  html, body, [data-testid="stAppViewContainer"]{ font-size: 14px; }
+  h1{font-size:1.6rem;} h2{font-size:1.35rem;} h3{font-size:1.15rem;}
+  .stMarkdown, label, .stTextInput label, .stSelectbox label, .stFileUploader label{ font-size:0.95rem; }
+  .stTextInput input, .stTextArea textarea{ font-size:0.95rem; }
+  .stButton button{ font-size:0.95rem; padding:0.45rem 0.8rem; border-radius:10px; }
+  [data-testid="stDataFrame"] div, [data-testid="stDataFrame"] table{ font-size:0.92rem; }
+}
+
+/* Small phones */
+@media (max-width: 480px){
+  html, body, [data-testid="stAppViewContainer"]{ font-size: 13px; }
+  h1{font-size:1.45rem;} h2{font-size:1.25rem;} h3{font-size:1.1rem;}
+  .stMarkdown, label, .stTextInput label, .stSelectbox label, .stFileUploader label{ font-size:0.9rem; }
+  .stTextInput input, .stTextArea textarea{ font-size:0.9rem; }
+  .stButton button{ font-size:0.9rem; padding:0.4rem 0.75rem; border-radius:10px; }
+  [data-testid="stDataFrame"] div, [data-testid="stDataFrame"] table{ font-size:0.88rem; }
+}
+</style>"""
+
 
 def ensure_credentials_ui():
     if os.path.exists(CREDENTIALS_FILE): return True
@@ -1195,7 +1254,7 @@ KBD,คีย์บอร์ด
 
 
 def main():
-    st.set_page_config(page_title=APP_TITLE, page_icon="🧰", layout="wide"); st.markdown(MINIMAL_CSS, unsafe_allow_html=True)
+    st.set_page_config(page_title=APP_TITLE, page_icon="🧰", layout="wide"); st.markdown(MINIMAL_CSS, unsafe_allow_html=True); st.markdown(RESPONSIVE_CSS, unsafe_allow_html=True)
     st.title(APP_TITLE); st.caption(APP_TAGLINE)
     ensure_credentials_ui()
     if "sheet_url" not in st.session_state or not st.session_state.get("sheet_url"): st.session_state["sheet_url"] = DEFAULT_SHEET_URL
