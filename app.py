@@ -25,6 +25,22 @@ import bcrypt
 import altair as alt
 
 # ---- Compatibility helper for Streamlit rerun ----
+
+# -------------------- User helper --------------------
+def get_username():
+    """
+    ดึงชื่อผู้ใช้จาก session_state ให้รองรับหลาย key
+    ถ้าไม่พบจะคืนค่า "unknown" เพื่อกัน NameError/KeyError
+    """
+    import streamlit as st
+    return (
+        st.session_state.get("user")
+        or st.session_state.get("username")
+        or st.session_state.get("display_name")
+        or "unknown"
+    )
+# -----------------------------------------------------
+
 def safe_rerun():
     import streamlit as st
     if hasattr(st, "rerun"):
