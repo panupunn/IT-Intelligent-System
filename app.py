@@ -34,6 +34,27 @@ def get_username():
     ถ้าไม่พบจะคืนค่า "unknown" เพื่อกัน NameError/KeyError
     """
     import streamlit as st
+
+def setup_responsive():
+    # Global CSS for better smartphone experience
+    st.markdown("""
+    <style>
+    /* Reduce paddings on narrow screens */
+    @media (max-width: 640px) {
+        .block-container { padding: 0.6rem 0.7rem !important; }
+        /* Stack columns (Streamlit columns are flex items) */
+        [data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; padding-right: 0 !important; }
+        /* Make buttons fill width for easier tapping */
+        .stButton > button { width: 100% !important; }
+        /* Make selects and inputs fill width */
+        .stSelectbox, .stTextInput, .stTextArea, .stDateInput { width: 100% !important; }
+        /* Dataframe should use container width; let it be scrollable horizontally */
+        .stDataFrame { width: 100% !important; }
+        /* Smaller chart margins */
+        .js-plotly-plot, .vega-embed { width: 100% !important; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
     return (
         st.session_state.get("user")
         or st.session_state.get("username")
@@ -583,7 +604,7 @@ def page_dashboard(sh):
         low_df2 = pd.DataFrame(columns=ITEMS_HEADERS)
     if not low_df2.empty:
         with st.expander("⚠️ อุปกรณ์ใกล้หมด (Reorder)", expanded=False):
-            st.dataframe(low_df2[["รหัส","ชื่ออุปกรณ์","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ"]], use_container_width=True, height=240)
+            st.dataframe(low_df2[["รหัส","ชื่ออุปกรณ์","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ"]], use_container_width=True, height=240, use_container_width=True)
             pdf = df_to_pdf_bytes(low_df2[["รหัส","ชื่ออุปกรณ์","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ"]], title="อุปกรณ์ใกล้หมดสต็อก", subtitle=get_now_str())
             st.download_button("ดาวน์โหลด PDF รายการใกล้หมด", data=pdf, file_name="low_stock.pdf", mime="application/pdf")
 
@@ -664,7 +685,7 @@ def page_tickets(sh):
             tmp = tmp.dropna(subset=["วันที่แจ้ง"]).sort_values("วันที่แจ้ง", ascending=False)
         view = tmp.head(50)
     st.markdown("### รายการแจ้งปัญหา")
-    st.dataframe(view.sort_values("วันที่แจ้ง", ascending=False) if not view.empty else view,
+    st.dataframe(view.sort_values("วันที่แจ้ง", ascending=False, use_container_width=True) if not view.empty else view,
                  use_container_width=True, height=300)
 
     st.markdown("---")
@@ -782,7 +803,7 @@ def page_stock(sh):
     if q and not items.empty:
         mask = items["รหัส"].str.contains(q, case=False, na=False) | items["ชื่ออุปกรณ์"].str.contains(q, case=False, na=False) | items["หมวดหมู่"].str.contains(q, case=False, na=False)
         view_df = items[mask]
-    st.dataframe(view_df, use_container_width=True, height=320)
+    st.dataframe(view_df, use_container_width=True, height=320, use_container_width=True)
 
     unit_opts = get_unit_options(items)
     loc_opts  = get_loc_options(items)
@@ -1095,7 +1116,7 @@ def page_reports(sh):
         if "out_df" in locals() and isinstance(out_df, pd.DataFrame) and not out_df.empty and "สาขา" in out_df.columns:
             out_df["สาขาแสดง"] = out_df["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
             out_df = out_df.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
-        st.dataframe(out_df[cols], use_container_width=True, height=320)
+        st.dataframe(out_df[cols], use_container_width=True, height=320, use_container_width=True)
         pdf = df_to_pdf_bytes(
             out_df[cols].rename(columns={"วันเวลา":"วันที่-เวลา","ชื่ออุปกรณ์":"อุปกรณ์","จำนวน":"จำนวนที่เบิก","สาขา":"ปลายทาง"}),
             title="รายละเอียดการเบิก (OUT)", subtitle=f"ช่วง {d1} ถึง {d2}"
@@ -1111,7 +1132,7 @@ def page_reports(sh):
         if "tdf_sorted" in locals() and isinstance(tdf_sorted, pd.DataFrame) and not tdf_sorted.empty and "สาขา" in tdf_sorted.columns:
             tdf_sorted["สาขาแสดง"] = tdf_sorted["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
             tdf_sorted = tdf_sorted.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
-        st.dataframe(tdf_sorted[show_cols], use_container_width=True, height=320)
+        st.dataframe(tdf_sorted[show_cols], use_container_width=True, height=320, use_container_width=True)
 
         st.markdown("#### สรุปจำนวนครั้งตาม 'เรื่อง' และ 'สาขา'")
         if not tdf.empty:
@@ -1122,7 +1143,7 @@ def page_reports(sh):
         if "agg" in locals() and isinstance(agg, pd.DataFrame) and not agg.empty and "สาขา" in agg.columns:
             agg["สาขาแสดง"] = agg["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
             agg = agg.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
-        st.dataframe(agg.sort_values(["จำนวนครั้ง","เรื่อง"], ascending=[False, True]), use_container_width=True, height=260)
+        st.dataframe(agg.sort_values(["จำนวนครั้ง","เรื่อง"], ascending=[False, True], use_container_width=True), use_container_width=True, height=260)
 
         pdf_t = df_to_pdf_bytes(agg.rename(columns={"เรื่อง":"ชื่อเรื่อง"}), title="สรุปการแจ้งปัญหา: เรื่อง × สาขา", subtitle=f"ช่วง {d1} ถึง {d2}")
         st.download_button("ดาวน์โหลด PDF สรุปการแจ้งปัญหา", data=pdf_t, file_name="ticket_summary_subject_branch.pdf", mime="application/pdf", key="dl_pdf_ticket_r")
@@ -1140,7 +1161,7 @@ def page_reports(sh):
         if "g" in locals() and isinstance(g, pd.DataFrame) and not g.empty and "สาขา" in g.columns:
             g["สาขาแสดง"] = g["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
             g = g.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
-        st.dataframe(g, use_container_width=True, height=220)
+        st.dataframe(g, use_container_width=True, height=220, use_container_width=True)
         st.download_button("ดาวน์โหลด PDF รายสัปดาห์", data=df_to_pdf_bytes(g, "สรุปรายสัปดาห์", f"ช่วง {d1} ถึง {d2}"), file_name="weekly_report.pdf", mime="application/pdf", key="dl_pdf_w_r")
 
     with tM:
@@ -1149,7 +1170,7 @@ def page_reports(sh):
         if "g" in locals() and isinstance(g, pd.DataFrame) and not g.empty and "สาขา" in g.columns:
             g["สาขาแสดง"] = g["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
             g = g.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
-        st.dataframe(g, use_container_width=True, height=220)
+        st.dataframe(g, use_container_width=True, height=220, use_container_width=True)
         st.download_button("ดาวน์โหลด PDF รายเดือน", data=df_to_pdf_bytes(g, "สรุปรายเดือน", f"ช่วง {d1} ถึง {d2}"), file_name="monthly_report.pdf", mime="application/pdf", key="dl_pdf_m_r")
 
     with tY:
@@ -1158,7 +1179,7 @@ def page_reports(sh):
         if "g" in locals() and isinstance(g, pd.DataFrame) and not g.empty and "สาขา" in g.columns:
             g["สาขาแสดง"] = g["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
             g = g.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
-        st.dataframe(g, use_container_width=True, height=220)
+        st.dataframe(g, use_container_width=True, height=220, use_container_width=True)
         st.download_button("ดาวน์โหลด PDF รายปี", data=df_to_pdf_bytes(g, "สรุปรายปี", f"ช่วง {d1} ถึง {d2}"), file_name="yearly_report.pdf", mime="application/pdf", key="dl_pdf_y_r")
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -1166,7 +1187,7 @@ def page_reports(sh):
 def page_users_admin(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("👥 ผู้ใช้ & สิทธิ์ (Admin)")
     if st.session_state.get("role") != "admin": st.info("เฉพาะผู้ดูแลระบบ (admin)"); st.markdown("</div>", unsafe_allow_html=True); return
-    users = read_df(sh, SHEET_USERS, USERS_HEADERS); st.dataframe(users, use_container_width=True, height=260)
+    users = read_df(sh, SHEET_USERS, USERS_HEADERS); st.dataframe(users, use_container_width=True, height=260, use_container_width=True)
     st.markdown("### เพิ่ม/แก้ไข ผู้ใช้")
     with st.form("user_form", clear_on_submit=True):
         c1,c2,c3 = st.columns(3)
@@ -1294,7 +1315,7 @@ def page_import(sh):
         # สร้างคอลัมน์เริ่มต้นถ้ายังไม่มี
         if "รหัสหมวดหมู่" not in cats.columns: cats["รหัสหมวดหมู่"] = ""
         if "ชื่อหมวดหมู่" not in cats.columns: cats["ชื่อหมวดหมู่"] = ""
-        st.dataframe(cats)
+        st.dataframe(cats, use_container_width=True)
 
     with st.form("edit_category_form", clear_on_submit=False):
         cat_code = st.text_input("รหัสหมวดหมู่")
@@ -1373,7 +1394,7 @@ BKK1,สาขาบางนา
             df, err = _read_upload_df(up)
             if err: st.error(err)
             else:
-                st.dataframe(df.head(20), use_container_width=True, height=200)
+                st.dataframe(df.head(20, use_container_width=True), use_container_width=True, height=200)
                 if not set(["รหัสหมวด","ชื่อหมวด"]).issubset(df.columns):
                     st.error("หัวตารางต้องประกอบด้วย: รหัสหมวด, ชื่อหมวด")
                 else:
@@ -1441,7 +1462,7 @@ BKK1,สาขาบางนา
             df, err = _read_upload_df(up)
             if err: st.error(err)
             else:
-                st.dataframe(df.head(20), use_container_width=True, height=200)
+                st.dataframe(df.head(20, use_container_width=True), use_container_width=True, height=200)
                 if not set(["รหัสสาขา","ชื่อสาขา"]).issubset(df.columns):
                     st.error("หัวตารางต้องประกอบด้วย: รหัสสาขา, ชื่อสาขา")
                 else:
@@ -1504,7 +1525,7 @@ BKK1,สาขาบางนา
             df, err = _read_upload_df(up)
             if err: st.error(err)
             else:
-                st.dataframe(df.head(20), use_container_width=True, height=260)
+                st.dataframe(df.head(20, use_container_width=True), use_container_width=True, height=260)
                 missing_cols = [c for c in ["หมวดหมู่","ชื่ออุปกรณ์","หน่วย","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ"] if c not in df.columns]
                 if missing_cols:
                     st.error("หัวตารางต้องประกอบด้วยอย่างน้อย: หมวดหมู่, ชื่ออุปกรณ์, หน่วย, คงเหลือ, จุดสั่งซื้อ, ที่เก็บ (รหัส, ใช้งาน เป็นออปชัน)")
@@ -1614,7 +1635,7 @@ BKK1,สาขาบางนา
             df, err = _read_upload_df(up)
             if err: st.error(err)
             else:
-                st.dataframe(df.head(20), use_container_width=True, height=200)
+                st.dataframe(df.head(20, use_container_width=True), use_container_width=True, height=200)
                 if not set(["รหัสหมวดปัญหา","ชื่อหมวดปัญหา"]).issubset(df.columns):
                     st.error("หัวตารางต้องประกอบด้วย: รหัสหมวดปัญหา, ชื่อหมวดปัญหา")
                 else:
