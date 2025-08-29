@@ -474,6 +474,66 @@ def make_bar(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title
     )
     st.altair_chart(chart, use_container_width=True)
 
+import matplotlib
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+
+def export_charts_to_pdf(charts, selected_titles, chart_kind):
+    """Build a PDF (bytes) of selected charts. charts: list of (title, df, label_col, value_col)."""
+    import pandas as pd
+    from io import BytesIO
+
+    # Use DejaVu Sans which supports Thai well
+    try:
+        matplotlib.rcParams['font.family'] = 'DejaVu Sans'
+    except Exception:
+        pass
+
+    buf = BytesIO()
+    with PdfPages(buf) as pdf:
+    # ====== พิมพ์/ดาวน์โหลดกราฟเป็น PDF ======
+    titles_all = [t for t,_,_,_ in charts]
+    if len(titles_all) > 0:
+        with st.expander("พิมพ์/ดาวน์โหลดกราฟเป็น PDF", expanded=False):
+            sel = st.multiselect("เลือกกราฟที่จะพิมพ์เป็น PDF", options=titles_all, default=titles_all[:min(2,len(titles_all))])
+            if sel:
+                pdf_bytes = export_charts_to_pdf(charts, sel, chart_kind)
+                st.download_button("ดาวน์โหลด PDF กราฟที่เลือก", data=pdf_bytes, file_name="dashboard_charts.pdf", mime="application/pdf")
+    # =========================================
+
+        for title, df, label_col, value_col in charts:
+            if title not in selected_titles:
+                continue
+            data = df.copy()
+            # ensure numeric
+            if value_col in data.columns:
+                data[value_col] = pd.to_numeric(data[value_col], errors="coerce").fillna(0)
+
+            plt.figure()
+            if chart_kind.endswith("(Bar)"):
+                # bar
+                plt.bar(data[label_col].astype(str), data[value_col])
+                plt.xticks(rotation=45, ha="right")
+                plt.ylabel(value_col)
+            else:
+                # pie
+                vals = data[value_col]
+                labels = data[label_col].astype(str)
+                if vals.sum() > 0:
+                    plt.pie(vals, labels=labels, autopct="%1.1f%%")
+                else:
+                    # avoid zero-sum pie
+                    plt.bar(labels, vals)
+                    plt.xticks(rotation=45, ha="right")
+                    plt.ylabel(value_col)
+            plt.title(title)
+            plt.tight_layout()
+            pdf.savefig()  # saves the current figure
+            plt.close()
+
+    buf.seek(0)
+    return buf.getvalue()
+
 def parse_range(choice: str, d1: date=None, d2: date=None):
     today = datetime.now(TZ).date()
     if choice == "วันนี้":
@@ -630,6 +690,17 @@ def page_dashboard(sh):
     if len(charts)==0:
         st.info("โปรดเลือกกราฟที่ต้องการแสดงจากด้านบน")
     else:
+
+        # ====== พิมพ์/ดาวน์โหลดกราฟเป็น PDF ======
+        titles_all = [t for t,_,_,_ in charts]
+        if len(titles_all) > 0:
+            with st.expander("พิมพ์/ดาวน์โหลดกราฟเป็น PDF", expanded=False):
+                sel = st.multiselect("เลือกกราฟที่จะพิมพ์เป็น PDF", options=titles_all, default=titles_all[:min(2,len(titles_all))])
+                if sel:
+                    pdf_bytes = export_charts_to_pdf(charts, sel, chart_kind)
+                    st.download_button("ดาวน์โหลด PDF กราฟที่เลือก", data=pdf_bytes, file_name="dashboard_charts.pdf", mime="application/pdf")
+        # =========================================
+else:
         rows = (len(charts) + per_row - 1) // per_row
         idx = 0
         for r in range(rows):
