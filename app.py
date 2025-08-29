@@ -11,6 +11,7 @@ v11:
 - รวมทุกฟีเจอร์จาก v10 (Dashboard, Stock, เบิก/รับ, รายงาน, Users, นำเข้า/แก้ไข หมวดหมู่, Settings + Clear test data)
 """
 import os, io, uuid, re, time
+import tempfile
 from datetime import datetime, date, timedelta, timedelta, date, time as dtime
 import pytz, pandas as pd, streamlit as st
 from reportlab.lib.pagesizes import A4, landscape
