@@ -409,7 +409,7 @@ def adjust_stock(sh, code, delta, actor, branch="", note="", txn_type="OUT", ts_
     append_row(sh, SHEET_TXNS, [str(uuid.uuid4())[:8], ts, txn_type, code, row["ชื่ออุปกรณ์"], branch, abs(delta), actor, note])
     return True
 
-def make_pie(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title: str, font_prop=None, font_prop=prop):
+def make_pie(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title: str, font_prop=None):
     if df.empty or (value_col in df.columns and pd.to_numeric(df[value_col], errors="coerce").fillna(0).sum() == 0):
         st.info(f"ยังไม่มีข้อมูลสำหรับกราฟ: {title}")
         return
@@ -433,7 +433,7 @@ def make_pie(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title
     )
     st.altair_chart(chart, use_container_width=True)
 
-def make_bar(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title: str, font_prop=None, font_prop=prop):
+def make_bar(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title: str, font_prop=None):
     if df.empty or (value_col in df.columns and pd.to_numeric(df[value_col], errors="coerce").fillna(0).sum() == 0):
         st.info(f"ยังไม่มีข้อมูลสำหรับกราฟ: {title}")
         return
