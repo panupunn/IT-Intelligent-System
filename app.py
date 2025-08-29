@@ -123,26 +123,72 @@ def open_sheet_by_url(sheet_url: str):
     gc = get_client()
     return gc.open_by_url(sheet_url)
 
-def ensure_sheets_exist(sh):
-    titles = [ws.title for ws in sh.worksheets()]
-    if SHEET_ITEMS not in titles:
-        ws = sh.add_worksheet(SHEET_ITEMS, 1000, len(ITEMS_HEADERS)+5); ws.append_row(ITEMS_HEADERS)
-    if SHEET_TXNS not in titles:
-        ws = sh.add_worksheet(SHEET_TXNS, 2000, len(TXNS_HEADERS)+5); ws.append_row(TXNS_HEADERS)
-    if SHEET_USERS not in titles:
-        ws = sh.add_worksheet(SHEET_USERS, 100, len(USERS_HEADERS)+2); ws.append_row(USERS_HEADERS)
-        default_pwd = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-        sh.worksheet(SHEET_USERS).append_row(["admin","Administrator","admin",default_pwd,"Y"])
-    if SHEET_CATS not in titles:
-        ws = sh.add_worksheet(SHEET_CATS, 200, len(CATS_HEADERS)+2); ws.append_row(CATS_HEADERS)
-    if SHEET_BRANCHES not in titles:
-        ws = sh.add_worksheet(SHEET_BRANCHES, 200, len(BR_HEADERS)+2); ws.append_row(BR_HEADERS)
-    if SHEET_TICKETS not in titles:
-        ws = sh.add_worksheet(SHEET_TICKETS, 1000, len(TICKETS_HEADERS)+5); ws.append_row(TICKETS_HEADERS)
-    if SHEET_TICKET_CATS not in titles:
-        ws = sh.add_worksheet(SHEET_TICKET_CATS, 200, len(TICKET_CAT_HEADERS)+2); ws.append_row(TICKET_CAT_HEADERS)
 
-# ---- Lightweight in-process cache for Google Sheets reads ----
+def ensure_sheets_exist(sh):
+    """
+    Make sure all required worksheets exist.
+    More resilient:
+      - Retries listing worksheets (handles intermittent API errors/quotas)
+      - Falls back to per-sheet check to avoid hard failure
+    """
+    import time
+    from gspread.exceptions import APIError, WorksheetNotFound
+
+    # Try listing worksheets up to 3 times
+    titles = []
+    for attempt in range(3):
+        try:
+            titles = [ws.title for ws in sh.worksheets()]
+            break
+        except APIError as e:
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            # Fallback will check per-sheet below
+            titles = None
+
+    required = [
+        (SHEET_ITEMS, ITEMS_HEADERS, 1000, len(ITEMS_HEADERS)+5),
+        (SHEET_TXNS, TXNS_HEADERS, 2000, len(TXNS_HEADERS)+5),
+        (SHEET_USERS, USERS_HEADERS, 100, len(USERS_HEADERS)+2),
+        (SHEET_CATS, CATS_HEADERS, 200, len(CATS_HEADERS)+2),
+        (SHEET_BRANCHES, BR_HEADERS, 200, len(BR_HEADERS)+2),
+        (SHEET_TICKETS, TICKETS_HEADERS, 1000, len(TICKETS_HEADERS)+5),
+        (SHEET_TICKET_CATS, TICKET_CAT_HEADERS, 200, len(TICKET_CAT_HEADERS)+2),
+    ]
+
+    def ensure_one(name, headers, rows, cols):
+        try:
+            if titles is not None:
+                if name in titles:
+                    return
+                # when titles are known and sheet missing -> create
+                ws = sh.add_worksheet(name, rows, cols)
+                ws.append_row(headers)
+            else:
+                # Fallback: check directly
+                try:
+                    sh.worksheet(name)  # exists
+                except WorksheetNotFound:
+                    ws = sh.add_worksheet(name, rows, cols)
+                    ws.append_row(headers)
+        except APIError as e:
+            # Surface a user-friendly error but don't crash the entire app
+            st.warning(f"ไม่สามารถตรวจสอบ/สร้างชีต '{name}' ได้ชั่วคราว: {e}. ลองรีเฟรชใหม่อีกครั้ง")
+
+    for name, headers, r, c in required:
+        ensure_one(name, headers, r, c)
+
+    # Seed default admin user when USERS sheet was newly created (or empty)
+    try:
+        ws_users = sh.worksheet(SHEET_USERS)
+        values = ws_users.get_all_values()
+        if len(values) <= 1:  # only header
+            default_pwd = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            ws_users.append_row(["admin","Administrator","admin",default_pwd,"Y"])
+    except Exception:
+        pass
+
 _READ_CACHE = {}
 
 def clear_read_cache():
