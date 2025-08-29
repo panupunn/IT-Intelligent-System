@@ -532,7 +532,7 @@ def page_dashboard(sh):
         low_df2 = pd.DataFrame(columns=ITEMS_HEADERS)
     if not low_df2.empty:
         with st.expander("⚠️ อุปกรณ์ใกล้หมด (Reorder)", expanded=False):
-            st.dataframe(low_df2[["รหัส","ชื่ออุปกรณ์","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ"]], use_container_width=True, height=240)
+    st.dataframe(low_df2[["รหัส","ชื่ออุปกรณ์","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ"]], use_container_width=True, height=240)
             pdf = df_to_pdf_bytes(low_df2[["รหัส","ชื่ออุปกรณ์","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ"]], title="อุปกรณ์ใกล้หมดสต็อก", subtitle=get_now_str())
             st.download_button("ดาวน์โหลด PDF รายการใกล้หมด", data=pdf, file_name="low_stock.pdf", mime="application/pdf")
 
@@ -612,7 +612,7 @@ def page_tickets(sh):
             tmp["วันที่แจ้ง"] = pd.to_datetime(tmp["วันที่แจ้ง"], errors="coerce")
             tmp = tmp.dropna(subset=["วันที่แจ้ง"]).sort_values("วันที่แจ้ง", ascending=False)
         view = tmp.head(50)
-st.markdown("### รายการแจ้งปัญหา")
+    st.markdown("### รายการแจ้งปัญหา")
     st.dataframe(view.sort_values("วันที่แจ้ง", ascending=False) if not view.empty else view,
                  use_container_width=True, height=300)
 
