@@ -24,86 +24,6 @@ from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
 import bcrypt
 import altair as alt
-import tempfile
-
-
-# ----- Thai PDF helpers (added) -----
-import matplotlib
-from matplotlib import pyplot as plt
-from matplotlib import font_manager as fm
-from matplotlib.backends.backend_pdf import PdfPages
-
-def ensure_thai_font(font_path: str | None = None):
-    """Return a FontProperties for Thai font and set rcParams for Thai + TrueType PDF."""
-    try:
-        if font_path and os.path.exists(font_path):
-            fm.fontManager.addfont(font_path)
-            prop = fm.FontProperties(fname=font_path)
-            matplotlib.rcParams["font.family"] = prop.get_name()
-        else:
-            preferred = ["Noto Sans Thai","Sarabun","TH Sarabun New","Kanit","Prompt","Leelawadee UI","Tahoma"]
-            available = {f.name: f.fname for f in fm.fontManager.ttflist}
-            chosen = None
-            for name in preferred:
-                if name in available:
-                    chosen = name; break
-            if chosen:
-                fm.fontManager.addfont(available[chosen])
-                prop = fm.FontProperties(fname=available[chosen])
-                matplotlib.rcParams["font.family"] = chosen
-            else:
-                prop = fm.FontProperties(family="DejaVu Sans")
-                matplotlib.rcParams["font.family"] = "DejaVu Sans"
-    except Exception:
-        prop = fm.FontProperties(family="DejaVu Sans")
-        matplotlib.rcParams["font.family"] = "DejaVu Sans"
-    # Embed TrueType and support minus sign
-    matplotlib.rcParams["axes.unicode_minus"] = False
-    matplotlib.rcParams["pdf.fonttype"] = 42
-    matplotlib.rcParams["ps.fonttype"] = 42
-    return prop
-
-def force_thai_font_in_fig(fig, prop):
-    """Set Thai font on all Matplotlib Text in figure."""
-    try:
-        import matplotlib.text as mtext
-        for t in fig.findobj(mtext.Text):
-            try: t.set_fontproperties(prop)
-            except Exception: pass
-    except Exception:
-        pass
-    return fig
-
-def make_pie_mpl(df, label_col, value_col, top_n, title, prop):
-    fig, ax = plt.subplots(figsize=(6,6))
-    s = df.groupby(label_col, dropna=False)[value_col].sum().reset_index().rename(columns={value_col:"sum_val"})
-    s[label_col] = s[label_col].replace("", "ไม่ระบุ")
-    s = s.sort_values("sum_val", ascending=False)
-    if len(s) > top_n:
-        top = s.head(top_n)
-        other = s.iloc[top_n:]["sum_val"].sum()
-        s = pd.concat([top, pd.DataFrame({label_col:["อื่นๆ"], "sum_val":[other]})], ignore_index=True)
-    wedges, texts, autotexts = ax.pie(s["sum_val"].values, labels=s[label_col].values, autopct="%1.1f%%", startangle=90)
-    ax.axis("equal")
-    ax.set_title(title, fontproperties=prop)
-    force_thai_font_in_fig(fig, prop)
-    fig.tight_layout()
-    return fig
-
-def export_charts_to_pdf_mpl(charts, selected_titles, top_n, font_path):
-    prop = ensure_thai_font(font_path)
-    import io
-    buf = io.BytesIO()
-    with PdfPages(buf) as pdf:
-        for title, df, label_col, value_col in charts:
-            if title not in selected_titles: 
-                continue
-            fig = make_pie_mpl(df, label_col, value_col, top_n, title, prop)
-            pdf.savefig(fig, bbox_inches="tight")
-            plt.close(fig)
-    buf.seek(0)
-    return buf.getvalue()
-# ----- end helpers -----
 
 # ---- Compatibility helper for Streamlit rerun ----
 
@@ -114,6 +34,27 @@ def get_username():
     ถ้าไม่พบจะคืนค่า "unknown" เพื่อกัน NameError/KeyError
     """
     import streamlit as st
+
+def setup_responsive():
+    # Global CSS for better smartphone experience
+    st.markdown("""
+    <style>
+    /* Reduce paddings on narrow screens */
+    @media (max-width: 640px) {
+        .block-container { padding: 0.6rem 0.7rem !important; }
+        /* Stack columns (Streamlit columns are flex items) */
+        [data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; padding-right: 0 !important; }
+        /* Make buttons fill width for easier tapping */
+        .stButton > button { width: 100% !important; }
+        /* Make selects and inputs fill width */
+        .stSelectbox, .stTextInput, .stTextArea, .stDateInput { width: 100% !important; }
+        /* Dataframe should use container width; let it be scrollable horizontally */
+        .stDataFrame { width: 100% !important; }
+        /* Smaller chart margins */
+        .js-plotly-plot, .vega-embed { width: 100% !important; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
     return (
         st.session_state.get("user")
         or st.session_state.get("username")
@@ -182,26 +123,72 @@ def open_sheet_by_url(sheet_url: str):
     gc = get_client()
     return gc.open_by_url(sheet_url)
 
-def ensure_sheets_exist(sh):
-    titles = [ws.title for ws in sh.worksheets()]
-    if SHEET_ITEMS not in titles:
-        ws = sh.add_worksheet(SHEET_ITEMS, 1000, len(ITEMS_HEADERS)+5); ws.append_row(ITEMS_HEADERS)
-    if SHEET_TXNS not in titles:
-        ws = sh.add_worksheet(SHEET_TXNS, 2000, len(TXNS_HEADERS)+5); ws.append_row(TXNS_HEADERS)
-    if SHEET_USERS not in titles:
-        ws = sh.add_worksheet(SHEET_USERS, 100, len(USERS_HEADERS)+2); ws.append_row(USERS_HEADERS)
-        default_pwd = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-        sh.worksheet(SHEET_USERS).append_row(["admin","Administrator","admin",default_pwd,"Y"])
-    if SHEET_CATS not in titles:
-        ws = sh.add_worksheet(SHEET_CATS, 200, len(CATS_HEADERS)+2); ws.append_row(CATS_HEADERS)
-    if SHEET_BRANCHES not in titles:
-        ws = sh.add_worksheet(SHEET_BRANCHES, 200, len(BR_HEADERS)+2); ws.append_row(BR_HEADERS)
-    if SHEET_TICKETS not in titles:
-        ws = sh.add_worksheet(SHEET_TICKETS, 1000, len(TICKETS_HEADERS)+5); ws.append_row(TICKETS_HEADERS)
-    if SHEET_TICKET_CATS not in titles:
-        ws = sh.add_worksheet(SHEET_TICKET_CATS, 200, len(TICKET_CAT_HEADERS)+2); ws.append_row(TICKET_CAT_HEADERS)
 
-# ---- Lightweight in-process cache for Google Sheets reads ----
+def ensure_sheets_exist(sh):
+    """
+    Make sure all required worksheets exist.
+    More resilient:
+      - Retries listing worksheets (handles intermittent API errors/quotas)
+      - Falls back to per-sheet check to avoid hard failure
+    """
+    import time
+    from gspread.exceptions import APIError, WorksheetNotFound
+
+    # Try listing worksheets up to 3 times
+    titles = []
+    for attempt in range(3):
+        try:
+            titles = [ws.title for ws in sh.worksheets()]
+            break
+        except APIError as e:
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            # Fallback will check per-sheet below
+            titles = None
+
+    required = [
+        (SHEET_ITEMS, ITEMS_HEADERS, 1000, len(ITEMS_HEADERS)+5),
+        (SHEET_TXNS, TXNS_HEADERS, 2000, len(TXNS_HEADERS)+5),
+        (SHEET_USERS, USERS_HEADERS, 100, len(USERS_HEADERS)+2),
+        (SHEET_CATS, CATS_HEADERS, 200, len(CATS_HEADERS)+2),
+        (SHEET_BRANCHES, BR_HEADERS, 200, len(BR_HEADERS)+2),
+        (SHEET_TICKETS, TICKETS_HEADERS, 1000, len(TICKETS_HEADERS)+5),
+        (SHEET_TICKET_CATS, TICKET_CAT_HEADERS, 200, len(TICKET_CAT_HEADERS)+2),
+    ]
+
+    def ensure_one(name, headers, rows, cols):
+        try:
+            if titles is not None:
+                if name in titles:
+                    return
+                # when titles are known and sheet missing -> create
+                ws = sh.add_worksheet(name, rows, cols)
+                ws.append_row(headers)
+            else:
+                # Fallback: check directly
+                try:
+                    sh.worksheet(name)  # exists
+                except WorksheetNotFound:
+                    ws = sh.add_worksheet(name, rows, cols)
+                    ws.append_row(headers)
+        except APIError as e:
+            # Surface a user-friendly error but don't crash the entire app
+            st.warning(f"ไม่สามารถตรวจสอบ/สร้างชีต '{name}' ได้ชั่วคราว: {e}. ลองรีเฟรชใหม่อีกครั้ง")
+
+    for name, headers, r, c in required:
+        ensure_one(name, headers, r, c)
+
+    # Seed default admin user when USERS sheet was newly created (or empty)
+    try:
+        ws_users = sh.worksheet(SHEET_USERS)
+        values = ws_users.get_all_values()
+        if len(values) <= 1:  # only header
+            default_pwd = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            ws_users.append_row(["admin","Administrator","admin",default_pwd,"Y"])
+    except Exception:
+        pass
+
 _READ_CACHE = {}
 
 def clear_read_cache():
@@ -445,6 +432,154 @@ def make_pie(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title
     )
     st.altair_chart(chart, use_container_width=True)
 
+def make_bar(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title: str):
+    if df.empty or (value_col in df.columns and pd.to_numeric(df[value_col], errors="coerce").fillna(0).sum() == 0):
+        st.info(f"ยังไม่มีข้อมูลสำหรับกราฟ: {title}")
+        return
+    work = df.copy()
+    if value_col in work.columns:
+        work[value_col] = pd.to_numeric(work[value_col], errors="coerce").fillna(0)
+    work = work.groupby(label_col, dropna=False)[value_col].sum().reset_index().rename(columns={value_col: "sum_val"})
+    work[label_col] = work[label_col].replace("", "ไม่ระบุ")
+    work = work.sort_values("sum_val", ascending=False)
+    if len(work) > top_n:
+        work = work.head(top_n)
+    st.markdown(f"**{title}**")
+    chart = alt.Chart(work).mark_bar().encode(
+        x=alt.X(f"{label_col}:N", sort='-y'),
+        y=alt.Y("sum_val:Q"),
+        tooltip=[f"{label_col}:N","sum_val:Q"]
+    )
+    st.altair_chart(chart.properties(height=320), use_container_width=True)
+    if df.empty or (value_col in df.columns and pd.to_numeric(df[value_col], errors="coerce").fillna(0).sum() == 0):
+        st.info(f"ยังไม่มีข้อมูลสำหรับกราฟ: {title}")
+        return
+    work = df.copy()
+    if value_col in work.columns:
+        work[value_col] = pd.to_numeric(work[value_col], errors="coerce").fillna(0)
+    work = work.groupby(label_col, dropna=False)[value_col].sum().reset_index().rename(columns={value_col: "sum_val"})
+    work[label_col] = work[label_col].replace("", "ไม่ระบุ")
+    work = work.sort_values("sum_val", ascending=False)
+    if len(work) > top_n:
+        top = work.head(top_n)
+        others = pd.DataFrame({label_col:["อื่นๆ"], "sum_val":[work["sum_val"].iloc[top_n:].sum()]})
+        work = pd.concat([top, others], ignore_index=True)
+    total = work["sum_val"].sum()
+    work["เปอร์เซ็นต์"] = (work["sum_val"] / total * 100).round(2) if total>0 else 0
+    st.markdown(f"**{title}**")
+    chart = alt.Chart(work).mark_arc(innerRadius=60).encode(
+        theta="sum_val:Q",
+        color=f"{label_col}:N",
+        tooltip=[f"{label_col}:N","sum_val:Q","เปอร์เซ็นต์:Q"]
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+import matplotlib
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+
+
+# --- Thai font helper for PDF/Matplotlib ---
+def ensure_thai_font(font_path: str = None):
+    import matplotlib
+    from matplotlib import font_manager as fm
+    # If user provided a font path, prioritize it
+    if font_path and os.path.exists(font_path):
+        try:
+            fm.fontManager.addfont(font_path)
+            prop = fm.FontProperties(fname=font_path)
+            matplotlib.rcParams["font.family"] = prop.get_name()
+            matplotlib.rcParams["axes.unicode_minus"] = False
+            matplotlib.rcParams["pdf.fonttype"] = 42
+            matplotlib.rcParams["ps.fonttype"] = 42
+            return prop.get_name()
+        except Exception:
+            pass
+
+    import matplotlib
+    from matplotlib import font_manager as fm
+    # Prefer common Thai fonts if available on the system
+    preferred = [
+        "Noto Sans Thai","Sarabun","TH Sarabun New","Kanit","Prompt",
+        "Tahoma","Leelawadee UI","Cordia New","Angsana New"
+    ]
+    available = {f.name: f.fname for f in fm.fontManager.ttflist}
+    chosen = None
+    for name in preferred:
+        # some backends store 'TH Sarabun New' as 'THSarabunNew' or similar
+        for fam, path in available.items():
+            low = fam.lower().replace(" ", "")
+            if name.lower().replace(" ", "") in low:
+                chosen = fam
+                break
+        if chosen:
+            break
+    if chosen:
+        try:
+            matplotlib.rcParams["font.family"] = chosen
+            matplotlib.rcParams["axes.unicode_minus"] = False
+            # Embed TrueType fonts into PDF to keep Thai glyphs
+            matplotlib.rcParams["pdf.fonttype"] = 42
+            matplotlib.rcParams["ps.fonttype"] = 42
+        except Exception:
+            pass
+    else:
+        # Fall back to DejaVu Sans but keep embedding settings; user may upload Thai TTF later
+        try:
+            matplotlib.rcParams["font.family"] = "DejaVu Sans"
+            matplotlib.rcParams["axes.unicode_minus"] = False
+            matplotlib.rcParams["pdf.fonttype"] = 42
+            matplotlib.rcParams["ps.fonttype"] = 42
+        except Exception:
+            pass
+def export_charts_to_pdf(charts, selected_titles, chart_kind):
+    """Build a PDF (bytes) of selected charts. charts: list of (title, df, label_col, value_col)."""
+    font_path = st.session_state.get("thai_font_path") if "thai_font_path" in st.session_state else None
+    ensure_thai_font(font_path)
+    import pandas as pd
+    from io import BytesIO
+
+    # Use DejaVu Sans which supports Thai well
+    try:
+        matplotlib.rcParams['font.family'] = 'DejaVu Sans'
+    except Exception:
+        pass
+
+    buf = BytesIO()
+    with PdfPages(buf) as pdf:
+        for title, df, label_col, value_col in charts:
+            if title not in selected_titles:
+                continue
+            data = df.copy()
+            # ensure numeric
+            if value_col in data.columns:
+                data[value_col] = pd.to_numeric(data[value_col], errors="coerce").fillna(0)
+
+            plt.figure()
+            if chart_kind.endswith("(Bar)"):
+                # bar
+                plt.bar(data[label_col].astype(str), data[value_col])
+                plt.xticks(rotation=45, ha="right")
+                plt.ylabel(value_col)
+            else:
+                # pie
+                vals = data[value_col]
+                labels = data[label_col].astype(str)
+                if vals.sum() > 0:
+                    plt.pie(vals, labels=labels, autopct="%1.1f%%")
+                else:
+                    # avoid zero-sum pie
+                    plt.bar(labels, vals)
+                    plt.xticks(rotation=45, ha="right")
+                    plt.ylabel(value_col)
+            plt.title(title)
+            plt.tight_layout()
+            pdf.savefig()  # saves the current figure
+            plt.close()
+
+    buf.seek(0)
+    return buf.getvalue()
+
 def parse_range(choice: str, d1: date=None, d2: date=None):
     today = datetime.now(TZ).date()
     if choice == "วันนี้":
@@ -467,6 +602,10 @@ def page_dashboard(sh):
 
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
     txns  = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
+    cats = read_df(sh, SHEET_CATS, CATS_HEADERS)
+    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
+    cat_map = {str(r['รหัสหมวด']).strip(): str(r['ชื่อหมวด']).strip() for _, r in cats.iterrows()} if not cats.empty else {}
+    br_map = {str(r['รหัสสาขา']).strip(): f"{str(r['รหัสสาขา']).strip()} | {str(r['ชื่อสาขา']).strip()}" for _, r in branches.iterrows()} if not branches.empty else {}
 
     total_items = len(items)
     total_qty = items["คงเหลือ"].apply(lambda x: int(float(x)) if str(x).strip() != "" else 0).sum() if not items.empty else 0
@@ -501,6 +640,7 @@ def page_dashboard(sh):
         top_n = st.slider("Top-N ต่อกราฟ", min_value=3, max_value=20, value=10, step=1)
     with colC:
         per_row = st.selectbox("จำนวนกราฟต่อแถว", [1,2,3,4], index=1)
+    chart_kind = st.radio("ชนิดกราฟ", ["กราฟวงกลม (Pie)", "กราฟแท่ง (Bar)"], horizontal=True)
 
     st.markdown("### ⏱️ ช่วงเวลา (ใช้กับกราฟประเภท 'เบิก ... (OUT)' เท่านั้น)")
     colR1, colR2, colR3 = st.columns(3)
@@ -527,7 +667,8 @@ def page_dashboard(sh):
         tmp = items.copy()
         tmp["คงเหลือ"] = pd.to_numeric(tmp["คงเหลือ"], errors="coerce").fillna(0)
         tmp = tmp.groupby("หมวดหมู่")["คงเหลือ"].sum().reset_index()
-        charts.append(("คงเหลือตามหมวดหมู่", tmp, "หมวดหมู่", "คงเหลือ"))
+        tmp["หมวดหมู่ชื่อ"] = tmp["หมวดหมู่"].map(cat_map).fillna(tmp["หมวดหมู่"])
+        charts.append(("คงเหลือตามหมวดหมู่", tmp, "หมวดหมู่ชื่อ", "คงเหลือ"))
 
     if "คงเหลือตามที่เก็บ" in chart_opts and not items.empty:
         tmp = items.copy()
@@ -539,12 +680,14 @@ def page_dashboard(sh):
         tmp = items.copy()
         tmp["count"] = 1
         tmp = tmp.groupby("หมวดหมู่")["count"].sum().reset_index()
-        charts.append(("จำนวนรายการตามหมวดหมู่", tmp, "หมวดหมู่", "count"))
+        tmp["หมวดหมู่ชื่อ"] = tmp["หมวดหมู่"].map(cat_map).fillna(tmp["หมวดหมู่"])
+        charts.append(("จำนวนรายการตามหมวดหมู่", tmp, "หมวดหมู่ชื่อ", "count"))
 
     if "เบิกตามสาขา (OUT)" in chart_opts:
         if not tx_out.empty:
             tmp = tx_out.groupby("สาขา", dropna=False)["จำนวน"].sum().reset_index()
-            charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", tmp, "สาขา", "จำนวน"))
+            tmp["สาขาแสดง"] = tmp["สาขา"].apply(lambda x: br_map.get(str(x).split(" | ")[0], str(x) if "|" in str(x) else str(x)))
+            charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", tmp, "สาขาแสดง", "จำนวน"))
         else:
             charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", pd.DataFrame({"สาขา":[], "จำนวน":[]}), "สาขา", "จำนวน"))
 
@@ -585,13 +728,34 @@ def page_dashboard(sh):
     if "Ticket ตามสาขา" in chart_opts:
         if not tdf.empty:
             tmp = tdf.groupby("สาขา", dropna=False)["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวน"})
-            charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", tmp, "สาขา", "จำนวน"))
+            tmp["สาขาแสดง"] = tmp["สาขา"].apply(lambda x: br_map.get(str(x).split(" | ")[0], str(x) if "|" in str(x) else str(x)))
+            charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", tmp, "สาขาแสดง", "จำนวน"))
         else:
             charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", pd.DataFrame({"สาขา":[], "จำนวน":[]}), "สาขา", "จำนวน"))
 
     if len(charts)==0:
         st.info("โปรดเลือกกราฟที่ต้องการแสดงจากด้านบน")
     else:
+        # ====== พิมพ์/ดาวน์โหลดกราฟเป็น PDF ======
+        titles_all = [t for t,_,_,_ in charts]
+        if len(titles_all) > 0:
+            with st.expander("พิมพ์/ดาวน์โหลดกราฟเป็น PDF", expanded=False):
+                # ฟอนต์ภาษาไทยสำหรับ PDF (อัปโหลดครั้งแรกครั้งเดียว)
+                up = st.file_uploader("อัปโหลดฟอนต์ไทย (.ttf) เพื่อให้ PDF แสดงไทยถูกต้อง", type=["ttf"], accept_multiple_files=False)
+                if up is not None:
+                    save_path = "/mnt/data/thai_font.ttf"
+                    with open(save_path, "wb") as f:
+                        f.write(up.read())
+                    st.session_state["thai_font_path"] = save_path
+                    st.success("บันทึกฟอนต์ไทยแล้ว: จะใช้ในการสร้าง PDF")
+                if "thai_font_path" in st.session_state:
+                    st.caption("ใช้ฟอนต์ไทยจาก: " + st.session_state["thai_font_path"])
+                sel = st.multiselect("เลือกกราฟที่จะพิมพ์เป็น PDF", options=titles_all, default=titles_all[:min(2,len(titles_all))])
+                if sel:
+                    pdf_bytes = export_charts_to_pdf(charts, sel, chart_kind)
+                    st.download_button("ดาวน์โหลด PDF กราฟที่เลือก", data=pdf_bytes, file_name="dashboard_charts.pdf", mime="application/pdf")
+        # =========================================
+
         rows = (len(charts) + per_row - 1) // per_row
         idx = 0
         for r in range(rows):
@@ -600,30 +764,10 @@ def page_dashboard(sh):
                 if idx >= len(charts): break
                 title, df, label_col, value_col = charts[idx]
                 with cols[c]:
-                    make_pie(df, label_col, value_col, top_n, title)
+                    make_bar(df, label_col, value_col, top_n, title) if chart_kind.endswith('(Bar)') else make_pie(df, label_col, value_col, top_n, title)
                 idx += 1
 
-    
-    # ----- PDF Export (added) -----
-    with st.expander("พิมพ์/ดาวน์โหลดกราฟเป็น PDF", expanded=False):
-        up = st.file_uploader("อัปโหลดฟอนต์ไทย (.ttf) เพื่อให้ PDF แสดงไทยถูกต้อง", type=["ttf"], key="pdf_font_upload")
-        if up is not None:
-            save_dir = os.path.join(tempfile.gettempdir(), "thai_fonts")
-            os.makedirs(save_dir, exist_ok=True)
-            save_path = os.path.join(save_dir, up.name or "thai_font.ttf")
-            with open(save_path, "wb") as f:
-                f.write(up.read())
-            st.session_state["thai_font_path"] = save_path
-            st.success("บันทึกฟอนต์ไทยแล้ว จะใช้สร้าง PDF")
-        font_path = st.session_state.get("thai_font_path")
-
-        titles_all = [t for (t, *_rest) in charts]
-        sel = st.multiselect("เลือกกราฟ", options=titles_all, default=titles_all, key="pdf_chart_sel")
-        if sel:
-            pdf_bytes = export_charts_to_pdf_mpl(charts, sel, top_n, font_path)
-            st.download_button("ดาวน์โหลด PDF กราฟที่เลือก", data=pdf_bytes,
-                               file_name="dashboard_charts.pdf", mime="application/pdf")
-items_num = items.copy()
+    items_num = items.copy()
     if not items_num.empty:
         items_num["คงเหลือ"] = pd.to_numeric(items_num["คงเหลือ"], errors="coerce").fillna(0)
         items_num["จุดสั่งซื้อ"] = pd.to_numeric(items_num["จุดสั่งซื้อ"], errors="coerce").fillna(0)
@@ -632,7 +776,7 @@ items_num = items.copy()
         low_df2 = pd.DataFrame(columns=ITEMS_HEADERS)
     if not low_df2.empty:
         with st.expander("⚠️ อุปกรณ์ใกล้หมด (Reorder)", expanded=False):
-    st.dataframe(low_df2[["รหัส","ชื่ออุปกรณ์","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ"]], use_container_width=True, height=240)
+            st.dataframe(low_df2[["รหัส","ชื่ออุปกรณ์","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ"]], height=240, use_container_width=True)
             pdf = df_to_pdf_bytes(low_df2[["รหัส","ชื่ออุปกรณ์","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ"]], title="อุปกรณ์ใกล้หมดสต็อก", subtitle=get_now_str())
             st.download_button("ดาวน์โหลด PDF รายการใกล้หมด", data=pdf, file_name="low_stock.pdf", mime="application/pdf")
 
@@ -713,8 +857,7 @@ def page_tickets(sh):
             tmp = tmp.dropna(subset=["วันที่แจ้ง"]).sort_values("วันที่แจ้ง", ascending=False)
         view = tmp.head(50)
     st.markdown("### รายการแจ้งปัญหา")
-    st.dataframe(view.sort_values("วันที่แจ้ง", ascending=False) if not view.empty else view,
-                 use_container_width=True, height=300)
+    st.dataframe(view.sort_values("วันที่แจ้ง", ascending=False) if not view.empty else view, height=300, use_container_width=True)
 
     st.markdown("---")
     t_add, t_update = st.tabs(["➕ รับแจ้งใหม่","🔁 เปลี่ยนสถานะ/แก้ไข"])
@@ -776,18 +919,52 @@ def page_tickets(sh):
                         t_type = st.selectbox("ประเภท", ["ฮาร์ดแวร์","ซอฟต์แวร์","เครือข่าย","อื่นๆ"], index=0 if str(row.get("ประเภท",""))=="" else 3)
                     with c2:
                         t_owner = st.text_input("ผู้แจ้ง", value=str(row.get("ผู้แจ้ง","")))
-                        t_status = st.selectbox("สถานะ", ["เปิด","กำลังดำเนินการ","ปิด"], index=0)
+                        statuses_edit = ["รับแจ้ง","กำลังดำเนินการ","ดำเนินการเสร็จ"]
+                        try:
+                            idx_default = statuses_edit.index(str(row.get("สถานะ","รับแจ้ง")))
+                        except ValueError:
+                            idx_default = 0
+                        t_status = st.selectbox("สถานะ", statuses_edit, index=idx_default)
+                        t_assignee = st.text_input("ผู้รับผิดชอบ", value=str(row.get("ผู้รับผิดชอบ","")))
                     t_desc = st.text_area("รายละเอียด", value=str(row.get("รายละเอียด","")), height=120)
         
+                    t_note = st.text_input("หมายเหตุ", value=str(row.get("หมายเหตุ","")))
                     fcol1, fcol2, fcol3 = st.columns(3)
                     submit_update = fcol1.form_submit_button("อัปเดต")
                     submit_delete = fcol3.form_submit_button("ลบรายการ")
         
                 if submit_update:
-                    # TODO: update the row in your sheet/dataframe using pick_id
-                    pass
+                    # อัปเดตแถวตาม TicketID ที่เลือก แล้วบันทึกกลับไปยังชีต
+                    try:
+                        idx = tickets.index[tickets["TicketID"] == pick_id]
+                        if len(idx) == 1:
+                            idx0 = idx[0]
+                            tickets.at[idx0, "สาขา"] = t_branch
+                            tickets.at[idx0, "ผู้แจ้ง"] = t_owner
+                            tickets.at[idx0, "รายละเอียด"] = t_desc
+                            tickets.at[idx0, "สถานะ"] = t_status
+                            tickets.at[idx0, "ผู้รับผิดชอบ"] = t_assignee
+                            tickets.at[idx0, "หมายเหตุ"] = t_note
+                            tickets.at[idx0, "อัปเดตล่าสุด"] = get_now_str()
+                            write_df(sh, SHEET_TICKETS, tickets)
+                            st.success("อัปเดตสถานะ/รายละเอียดเรียบร้อย")
+                            safe_rerun()
+                        else:
+                            st.error("ไม่พบ Ticket ที่เลือก หรือมีมากกว่าหนึ่งรายการ")
+                    except Exception as e:
+                        st.error(f"อัปเดตไม่สำเร็จ: {e}")
                 if submit_delete:
-                    # TODO: delete the row in your sheet/dataframe using pick_id
+                    # ลบแถวตาม TicketID ที่เลือก แล้วบันทึกกลับไปยังชีต
+                    try:
+                        tickets2 = tickets[tickets["TicketID"] != pick_id].copy()
+                        if len(tickets2) == len(tickets):
+                            st.warning("ไม่พบ Ticket ที่จะลบ")
+                        else:
+                            write_df(sh, SHEET_TICKETS, tickets2)
+                            st.success("ลบรายการเรียบร้อย")
+                            safe_rerun()
+                    except Exception as e:
+                        st.error(f"ลบไม่สำเร็จ: {e}")
                     pass
 def page_stock(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("📦 คลังอุปกรณ์")
@@ -797,7 +974,7 @@ def page_stock(sh):
     if q and not items.empty:
         mask = items["รหัส"].str.contains(q, case=False, na=False) | items["ชื่ออุปกรณ์"].str.contains(q, case=False, na=False) | items["หมวดหมู่"].str.contains(q, case=False, na=False)
         view_df = items[mask]
-    st.dataframe(view_df, use_container_width=True, height=320)
+    st.dataframe(view_df, height=320, use_container_width=True)
 
     unit_opts = get_unit_options(items)
     loc_opts  = get_loc_options(items)
@@ -843,10 +1020,14 @@ def page_stock(sh):
             if items.empty:
                 st.info("ยังไม่มีรายการให้แก้ไข")
             else:
-                codes = items["รหัส"].tolist()
-                pick = st.selectbox("เลือกรหัสอุปกรณ์", options=["-- เลือก --"]+codes)
-                if pick != "-- เลือก --":
-                    row = items[items["รหัส"]==pick].iloc[0]
+                labels = []
+                for _idx, _r in items.iterrows():
+                    _name = str(_r.get("ชื่ออุปกรณ์","")).strip()
+                    labels.append(f'{_r["รหัส"]} | {_name}')
+                pick_label = st.selectbox("เลือกรหัสอุปกรณ์", options=["-- เลือก --"] + labels)
+                if pick_label != "-- เลือก --":
+                    pick = pick_label.split(" | ", 1)[0]
+                    row = items[items["รหัส"] == pick].iloc[0]
                     unit_opts_edit = unit_opts[:-1]
                     if row["หน่วย"] not in unit_opts_edit and str(row["หน่วย"]).strip()!="":
                         unit_opts_edit = [row["หน่วย"]] + unit_opts_edit
@@ -1000,6 +1181,9 @@ def page_reports(sh):
     st.subheader("📑 รายงาน / ประวัติ")
 
     txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
+    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
+    br_map = {str(r["รหัสสาขา"]).strip(): f'{str(r["รหัสสาขา"]).strip()} | {str(r["ชื่อสาขา"]).strip()}' for _, r in branches.iterrows()} if not branches.empty else {}
+
     tickets = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
 
     # ---------- Quick range state ----------
@@ -1099,7 +1283,11 @@ def page_reports(sh):
     with tOut:
         out_df = df_f[df_f["ประเภท"] == "OUT"].copy().sort_values("วันเวลา", ascending=False)
         cols = [c for c in ["วันเวลา", "ชื่ออุปกรณ์", "จำนวน", "สาขา", "ผู้ดำเนินการ", "หมายเหตุ", "รหัส"] if c in out_df.columns]
-        st.dataframe(out_df[cols], use_container_width=True, height=320)
+        
+        if "out_df" in locals() and isinstance(out_df, pd.DataFrame) and not out_df.empty and "สาขา" in out_df.columns:
+            out_df["สาขาแสดง"] = out_df["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
+            out_df = out_df.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
+        st.dataframe(out_df[cols], height=320, use_container_width=True)
         pdf = df_to_pdf_bytes(
             out_df[cols].rename(columns={"วันเวลา":"วันที่-เวลา","ชื่ออุปกรณ์":"อุปกรณ์","จำนวน":"จำนวนที่เบิก","สาขา":"ปลายทาง"}),
             title="รายละเอียดการเบิก (OUT)", subtitle=f"ช่วง {d1} ถึง {d2}"
@@ -1111,14 +1299,22 @@ def page_reports(sh):
         st.markdown("#### ตารางรายการแจ้งปัญหา")
         show_cols = [c for c in ["วันที่แจ้ง","เรื่อง","รายละเอียด","สาขา","ผู้แจ้ง","สถานะ","ผู้รับผิดชอบ","หมายเหตุ","TicketID"] if c in tdf.columns]
         tdf_sorted = tdf.sort_values("วันที่แจ้ง", ascending=False)
-        st.dataframe(tdf_sorted[show_cols], use_container_width=True, height=320)
+        
+        if "tdf_sorted" in locals() and isinstance(tdf_sorted, pd.DataFrame) and not tdf_sorted.empty and "สาขา" in tdf_sorted.columns:
+            tdf_sorted["สาขาแสดง"] = tdf_sorted["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
+            tdf_sorted = tdf_sorted.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
+        st.dataframe(tdf_sorted[show_cols], height=320, use_container_width=True)
 
         st.markdown("#### สรุปจำนวนครั้งตาม 'เรื่อง' และ 'สาขา'")
         if not tdf.empty:
             agg = tdf.groupby(["เรื่อง","สาขา"])["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวนครั้ง"})
         else:
             agg = pd.DataFrame(columns=["เรื่อง","สาขา","จำนวนครั้ง"])
-        st.dataframe(agg.sort_values(["จำนวนครั้ง","เรื่อง"], ascending=[False, True]), use_container_width=True, height=260)
+        
+        if "agg" in locals() and isinstance(agg, pd.DataFrame) and not agg.empty and "สาขา" in agg.columns:
+            agg["สาขาแสดง"] = agg["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
+            agg = agg.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
+        st.dataframe(agg.sort_values(["จำนวนครั้ง","เรื่อง"], ascending=[False, True]), height=260, use_container_width=True)
 
         pdf_t = df_to_pdf_bytes(agg.rename(columns={"เรื่อง":"ชื่อเรื่อง"}), title="สรุปการแจ้งปัญหา: เรื่อง × สาขา", subtitle=f"ช่วง {d1} ถึง {d2}")
         st.download_button("ดาวน์โหลด PDF สรุปการแจ้งปัญหา", data=pdf_t, file_name="ticket_summary_subject_branch.pdf", mime="application/pdf", key="dl_pdf_ticket_r")
@@ -1132,17 +1328,29 @@ def page_reports(sh):
 
     with tW:
         g = group_period(df_f, "W")
-        st.dataframe(g, use_container_width=True, height=220)
+        
+        if "g" in locals() and isinstance(g, pd.DataFrame) and not g.empty and "สาขา" in g.columns:
+            g["สาขาแสดง"] = g["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
+            g = g.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
+        st.dataframe(g, height=220, use_container_width=True)
         st.download_button("ดาวน์โหลด PDF รายสัปดาห์", data=df_to_pdf_bytes(g, "สรุปรายสัปดาห์", f"ช่วง {d1} ถึง {d2}"), file_name="weekly_report.pdf", mime="application/pdf", key="dl_pdf_w_r")
 
     with tM:
         g = group_period(df_f, "ME")
-        st.dataframe(g, use_container_width=True, height=220)
+        
+        if "g" in locals() and isinstance(g, pd.DataFrame) and not g.empty and "สาขา" in g.columns:
+            g["สาขาแสดง"] = g["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
+            g = g.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
+        st.dataframe(g, height=220, use_container_width=True)
         st.download_button("ดาวน์โหลด PDF รายเดือน", data=df_to_pdf_bytes(g, "สรุปรายเดือน", f"ช่วง {d1} ถึง {d2}"), file_name="monthly_report.pdf", mime="application/pdf", key="dl_pdf_m_r")
 
     with tY:
         g = group_period(df_f, "YE")
-        st.dataframe(g, use_container_width=True, height=220)
+        
+        if "g" in locals() and isinstance(g, pd.DataFrame) and not g.empty and "สาขา" in g.columns:
+            g["สาขาแสดง"] = g["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
+            g = g.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
+        st.dataframe(g, height=220, use_container_width=True)
         st.download_button("ดาวน์โหลด PDF รายปี", data=df_to_pdf_bytes(g, "สรุปรายปี", f"ช่วง {d1} ถึง {d2}"), file_name="yearly_report.pdf", mime="application/pdf", key="dl_pdf_y_r")
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -1150,7 +1358,7 @@ def page_reports(sh):
 def page_users_admin(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("👥 ผู้ใช้ & สิทธิ์ (Admin)")
     if st.session_state.get("role") != "admin": st.info("เฉพาะผู้ดูแลระบบ (admin)"); st.markdown("</div>", unsafe_allow_html=True); return
-    users = read_df(sh, SHEET_USERS, USERS_HEADERS); st.dataframe(users, use_container_width=True, height=260)
+    users = read_df(sh, SHEET_USERS, USERS_HEADERS); st.dataframe(users, height=260, use_container_width=True)
     st.markdown("### เพิ่ม/แก้ไข ผู้ใช้")
     with st.form("user_form", clear_on_submit=True):
         c1,c2,c3 = st.columns(3)
@@ -1278,7 +1486,7 @@ def page_import(sh):
         # สร้างคอลัมน์เริ่มต้นถ้ายังไม่มี
         if "รหัสหมวดหมู่" not in cats.columns: cats["รหัสหมวดหมู่"] = ""
         if "ชื่อหมวดหมู่" not in cats.columns: cats["ชื่อหมวดหมู่"] = ""
-        st.dataframe(cats)
+        st.dataframe(cats, use_container_width=True)
 
     with st.form("edit_category_form", clear_on_submit=False):
         cat_code = st.text_input("รหัสหมวดหมู่")
@@ -1357,7 +1565,7 @@ BKK1,สาขาบางนา
             df, err = _read_upload_df(up)
             if err: st.error(err)
             else:
-                st.dataframe(df.head(20), use_container_width=True, height=200)
+                st.dataframe(df.head(20), height=200, use_container_width=True)
                 if not set(["รหัสหมวด","ชื่อหมวด"]).issubset(df.columns):
                     st.error("หัวตารางต้องประกอบด้วย: รหัสหมวด, ชื่อหมวด")
                 else:
@@ -1425,7 +1633,7 @@ BKK1,สาขาบางนา
             df, err = _read_upload_df(up)
             if err: st.error(err)
             else:
-                st.dataframe(df.head(20), use_container_width=True, height=200)
+                st.dataframe(df.head(20), height=200, use_container_width=True)
                 if not set(["รหัสสาขา","ชื่อสาขา"]).issubset(df.columns):
                     st.error("หัวตารางต้องประกอบด้วย: รหัสสาขา, ชื่อสาขา")
                 else:
@@ -1488,7 +1696,7 @@ BKK1,สาขาบางนา
             df, err = _read_upload_df(up)
             if err: st.error(err)
             else:
-                st.dataframe(df.head(20), use_container_width=True, height=260)
+                st.dataframe(df.head(20), height=260, use_container_width=True)
                 missing_cols = [c for c in ["หมวดหมู่","ชื่ออุปกรณ์","หน่วย","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ"] if c not in df.columns]
                 if missing_cols:
                     st.error("หัวตารางต้องประกอบด้วยอย่างน้อย: หมวดหมู่, ชื่ออุปกรณ์, หน่วย, คงเหลือ, จุดสั่งซื้อ, ที่เก็บ (รหัส, ใช้งาน เป็นออปชัน)")
@@ -1598,7 +1806,7 @@ BKK1,สาขาบางนา
             df, err = _read_upload_df(up)
             if err: st.error(err)
             else:
-                st.dataframe(df.head(20), use_container_width=True, height=200)
+                st.dataframe(df.head(20), height=200, use_container_width=True)
                 if not set(["รหัสหมวดปัญหา","ชื่อหมวดปัญหา"]).issubset(df.columns):
                     st.error("หัวตารางต้องประกอบด้วย: รหัสหมวดปัญหา, ชื่อหมวดปัญหา")
                 else:
@@ -1679,7 +1887,7 @@ def main():
     elif page.startswith("📑"): page_reports(sh)
     elif page.startswith("👤") or page.startswith("👥"): page_users_admin(sh)
     elif page.startswith("นำเข้า") or page.startswith("🗂️"): page_import(sh)
-    st.caption("© 2025 IT Stock · Streamlit + Google Sheets")
+    st.caption("© 2025 IT Stock · Streamlit + Google Sheets By.AOD")
 
 if __name__ == "__main__":
     main()
