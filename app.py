@@ -365,6 +365,48 @@ def make_pie(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title
     )
     st.altair_chart(chart, use_container_width=True)
 
+def make_bar(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title: str):
+    if df.empty or (value_col in df.columns and pd.to_numeric(df[value_col], errors="coerce").fillna(0).sum() == 0):
+        st.info(f"ยังไม่มีข้อมูลสำหรับกราฟ: {title}")
+        return
+    work = df.copy()
+    if value_col in work.columns:
+        work[value_col] = pd.to_numeric(work[value_col], errors="coerce").fillna(0)
+    work = work.groupby(label_col, dropna=False)[value_col].sum().reset_index().rename(columns={value_col: "sum_val"})
+    work[label_col] = work[label_col].replace("", "ไม่ระบุ")
+    work = work.sort_values("sum_val", ascending=False)
+    if len(work) > top_n:
+        work = work.head(top_n)
+    st.markdown(f"**{title}**")
+    chart = alt.Chart(work).mark_bar().encode(
+        x=alt.X(f"{label_col}:N", sort='-y'),
+        y=alt.Y("sum_val:Q"),
+        tooltip=[f"{label_col}:N","sum_val:Q"]
+    )
+    st.altair_chart(chart.properties(height=320), use_container_width=True)
+    if df.empty or (value_col in df.columns and pd.to_numeric(df[value_col], errors="coerce").fillna(0).sum() == 0):
+        st.info(f"ยังไม่มีข้อมูลสำหรับกราฟ: {title}")
+        return
+    work = df.copy()
+    if value_col in work.columns:
+        work[value_col] = pd.to_numeric(work[value_col], errors="coerce").fillna(0)
+    work = work.groupby(label_col, dropna=False)[value_col].sum().reset_index().rename(columns={value_col: "sum_val"})
+    work[label_col] = work[label_col].replace("", "ไม่ระบุ")
+    work = work.sort_values("sum_val", ascending=False)
+    if len(work) > top_n:
+        top = work.head(top_n)
+        others = pd.DataFrame({label_col:["อื่นๆ"], "sum_val":[work["sum_val"].iloc[top_n:].sum()]})
+        work = pd.concat([top, others], ignore_index=True)
+    total = work["sum_val"].sum()
+    work["เปอร์เซ็นต์"] = (work["sum_val"] / total * 100).round(2) if total>0 else 0
+    st.markdown(f"**{title}**")
+    chart = alt.Chart(work).mark_arc(innerRadius=60).encode(
+        theta="sum_val:Q",
+        color=f"{label_col}:N",
+        tooltip=[f"{label_col}:N","sum_val:Q","เปอร์เซ็นต์:Q"]
+    )
+    st.altair_chart(chart, use_container_width=True)
+
 def parse_range(choice: str, d1: date=None, d2: date=None):
     today = datetime.now(TZ).date()
     if choice == "วันนี้":
@@ -387,6 +429,10 @@ def page_dashboard(sh):
 
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
     txns  = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
+    cats = read_df(sh, SHEET_CATS, CATS_HEADERS)
+    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
+    cat_map = {str(r['รหัสหมวด']).strip(): str(r['ชื่อหมวด']).strip() for _, r in cats.iterrows()} if not cats.empty else {}
+    br_map = {str(r['รหัสสาขา']).strip(): f"{str(r['รหัสสาขา']).strip()} | {str(r['ชื่อสาขา']).strip()}" for _, r in branches.iterrows()} if not branches.empty else {}
 
     total_items = len(items)
     total_qty = items["คงเหลือ"].apply(lambda x: int(float(x)) if str(x).strip() != "" else 0).sum() if not items.empty else 0
@@ -421,6 +467,7 @@ def page_dashboard(sh):
         top_n = st.slider("Top-N ต่อกราฟ", min_value=3, max_value=20, value=10, step=1)
     with colC:
         per_row = st.selectbox("จำนวนกราฟต่อแถว", [1,2,3,4], index=1)
+    chart_kind = st.radio("ชนิดกราฟ", ["กราฟวงกลม (Pie)", "กราฟแท่ง (Bar)"], horizontal=True)
 
     st.markdown("### ⏱️ ช่วงเวลา (ใช้กับกราฟประเภท 'เบิก ... (OUT)' เท่านั้น)")
     colR1, colR2, colR3 = st.columns(3)
@@ -447,7 +494,8 @@ def page_dashboard(sh):
         tmp = items.copy()
         tmp["คงเหลือ"] = pd.to_numeric(tmp["คงเหลือ"], errors="coerce").fillna(0)
         tmp = tmp.groupby("หมวดหมู่")["คงเหลือ"].sum().reset_index()
-        charts.append(("คงเหลือตามหมวดหมู่", tmp, "หมวดหมู่", "คงเหลือ"))
+        tmp["หมวดหมู่ชื่อ"] = tmp["หมวดหมู่"].map(cat_map).fillna(tmp["หมวดหมู่"])
+        charts.append(("คงเหลือตามหมวดหมู่", tmp, "หมวดหมู่ชื่อ", "คงเหลือ"))
 
     if "คงเหลือตามที่เก็บ" in chart_opts and not items.empty:
         tmp = items.copy()
@@ -459,12 +507,14 @@ def page_dashboard(sh):
         tmp = items.copy()
         tmp["count"] = 1
         tmp = tmp.groupby("หมวดหมู่")["count"].sum().reset_index()
-        charts.append(("จำนวนรายการตามหมวดหมู่", tmp, "หมวดหมู่", "count"))
+        tmp["หมวดหมู่ชื่อ"] = tmp["หมวดหมู่"].map(cat_map).fillna(tmp["หมวดหมู่"])
+        charts.append(("จำนวนรายการตามหมวดหมู่", tmp, "หมวดหมู่ชื่อ", "count"))
 
     if "เบิกตามสาขา (OUT)" in chart_opts:
         if not tx_out.empty:
             tmp = tx_out.groupby("สาขา", dropna=False)["จำนวน"].sum().reset_index()
-            charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", tmp, "สาขา", "จำนวน"))
+            tmp["สาขาแสดง"] = tmp["สาขา"].apply(lambda x: br_map.get(str(x).split(" | ")[0], str(x) if "|" in str(x) else str(x)))
+            charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", tmp, "สาขาแสดง", "จำนวน"))
         else:
             charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", pd.DataFrame({"สาขา":[], "จำนวน":[]}), "สาขา", "จำนวน"))
 
@@ -505,7 +555,8 @@ def page_dashboard(sh):
     if "Ticket ตามสาขา" in chart_opts:
         if not tdf.empty:
             tmp = tdf.groupby("สาขา", dropna=False)["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวน"})
-            charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", tmp, "สาขา", "จำนวน"))
+            tmp["สาขาแสดง"] = tmp["สาขา"].apply(lambda x: br_map.get(str(x).split(" | ")[0], str(x) if "|" in str(x) else str(x)))
+            charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", tmp, "สาขาแสดง", "จำนวน"))
         else:
             charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", pd.DataFrame({"สาขา":[], "จำนวน":[]}), "สาขา", "จำนวน"))
 
@@ -520,7 +571,7 @@ def page_dashboard(sh):
                 if idx >= len(charts): break
                 title, df, label_col, value_col = charts[idx]
                 with cols[c]:
-                    make_pie(df, label_col, value_col, top_n, title)
+                    make_bar(df, label_col, value_col, top_n, title) if chart_kind.endswith('(Bar)') else make_pie(df, label_col, value_col, top_n, title)
                 idx += 1
 
     items_num = items.copy()
