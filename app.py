@@ -743,10 +743,14 @@ def page_stock(sh):
             if items.empty:
                 st.info("ยังไม่มีรายการให้แก้ไข")
             else:
-                codes = items["รหัส"].tolist()
-                pick = st.selectbox("เลือกรหัสอุปกรณ์", options=["-- เลือก --"]+codes)
-                if pick != "-- เลือก --":
-                    row = items[items["รหัส"]==pick].iloc[0]
+                labels = []
+                for _idx, _r in items.iterrows():
+                    _name = str(_r.get("ชื่ออุปกรณ์","")).strip()
+                    labels.append(f'{_r["รหัส"]} | {_name}')
+                pick_label = st.selectbox("เลือกรหัสอุปกรณ์", options=["-- เลือก --"] + labels)
+                if pick_label != "-- เลือก --":
+                    pick = pick_label.split(" | ", 1)[0]
+                    row = items[items["รหัส"] == pick].iloc[0]
                     unit_opts_edit = unit_opts[:-1]
                     if row["หน่วย"] not in unit_opts_edit and str(row["หน่วย"]).strip()!="":
                         unit_opts_edit = [row["หน่วย"]] + unit_opts_edit
