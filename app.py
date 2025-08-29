@@ -638,62 +638,92 @@ def page_tickets(sh):
             safe_rerun()
 
     with t_update:
-        if tickets.empty:
-            st.info("ยังไม่มีรายการในชีต Tickets")
-        else:
-                labels = []
+
+    if tickets.empty:
+
+        st.info("ยังไม่มีรายการในชีต Tickets")
+
+    else:
+
+        # Build labels: "TicketID | ชื่อสาขา"
+
+        labels = []
+
         for _idx, _r in tickets.iterrows():
-            _branch_raw = str(_r.get("สาขา","")).strip()
-            # If stored as "รหัส | ชื่อ", extract only ชื่อสาขา
+
+            _branch_raw = str(_r.get("สาขา", "")).strip()
+
             if " | " in _branch_raw:
+
                 try:
+
                     _branch_name = _branch_raw.split(" | ", 1)[1].strip() or _branch_raw
+
                 except Exception:
+
                     _branch_name = _branch_raw
+
             else:
+
                 _branch_name = _branch_raw or "ไม่ระบุสาขา"
+
             labels.append(f'{_r["TicketID"]} | {_branch_name}')
+
+
+
         pick_label = st.selectbox("เลือก Ticket", options=["-- เลือก --"] + labels, key="tk_pick")
+
         if pick_label != "-- เลือก --":
+
             pick_id = pick_label.split(" | ", 1)[0]
+
             row = tickets[tickets["TicketID"] == pick_id].iloc[0]
-                with st.form("tk_edit", clear_on_submit=False):
-                    c1,c2,c3 = st.columns(3)
-                    with c1:
-                        branch = st.text_input("สาขา", value=row["สาขา"])
-                        reporter = st.text_input("ผู้แจ้ง", value=row["ผู้แจ้ง"])
-                    with c2:
-                        tkc_opts2 = ((t_cats["รหัสหมวดปัญหา"] + " | " + t_cats["ชื่อหมวดปัญหา"]).tolist() if not t_cats.empty else []) + ["พิมพ์เอง"]
-                        default_index = tkc_opts2.index(row["หมวดหมู่"]) if (row["หมวดหมู่"] in tkc_opts2) else len(tkc_opts2)-1
-                        pick_c2 = st.selectbox("หมวดหมู่", options=tkc_opts2, index=default_index, key="tk_edit_cat_sel")
-                        cate_custom2 = st.text_input("ระบุหมวด (ถ้าเลือกพิมพ์เอง)", value="" if pick_c2!="พิมพ์เอง" else row["หมวดหมู่"], disabled=(pick_c2!="พิมพ์เอง"))
-                        cate = pick_c2 if pick_c2 != "พิมพ์เอง" else cate_custom2
-                        status = st.selectbox("สถานะ", ["รับแจ้ง","กำลังดำเนินการ","ดำเนินการเสร็จ"],
-                                              index=["รับแจ้ง","กำลังดำเนินการ","ดำเนินการเสร็จ"].index(row["สถานะ"]) if row["สถานะ"] in ["รับแจ้ง","กำลังดำเนินการ","ดำเนินการเสร็จ"] else 0)
-                        assignee = st.text_input("ผู้รับผิดชอบ", value=row["ผู้รับผิดชอบ"])
-                    with c3:
-                        detail = st.text_area("รายละเอียด", value=row["รายละเอียด"], height=100)
-                        note = st.text_input("หมายเหตุ", value=row["หมายเหตุ"])
-                    colA, colB, colC = st.columns([2,1,1])
-                    save = colA.form_submit_button("💾 บันทึกการแก้ไข", use_container_width=True)
-                    done = colB.form_submit_button("✅ ปิดงาน (เสร็จ)", use_container_width=True)
-                    delete = colC.form_submit_button("🗑️ ลบ Ticket", use_container_width=True)
 
-                if save or done or delete:
-                    df = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
-                    if delete:
-                        df = df[df["TicketID"] != pick_id]
-                        write_df(sh, SHEET_TICKETS, df)
-                        st.success("ลบแล้ว"); safe_rerun()
-                    else:
-                        if done: status = "ดำเนินการเสร็จ"
-                        df.loc[df["TicketID"]==pick_id, ["สาขา","ผู้แจ้ง","หมวดหมู่","รายละเอียด","สถานะ","ผู้รับผิดชอบ","อัปเดตล่าสุด","หมายเหตุ"]] = \
-                            [branch, reporter, cate, detail, status, assignee, get_now_str(), note]
-                        write_df(sh, SHEET_TICKETS, df)
-                        st.success("อัปเดตแล้ว"); safe_rerun()
 
-    st.markdown("</div>", unsafe_allow_html=True)
 
+            st.subheader(f"แก้ไข Ticket: {pick_id}")
+
+            # ======= Edit Form =======
+
+            with st.form("tk_edit", clear_on_submit=False):
+
+                c1, c2 = st.columns(2)
+
+                with c1:
+
+                    t_branch = st.text_input("สาขา", value=str(row.get("สาขา", "")))
+
+                    t_type = st.selectbox("ประเภท", ["ฮาร์ดแวร์","ซอฟต์แวร์","เครือข่าย","อื่นๆ"], index=0 if str(row.get("ประเภท",""))=="" else 3)
+
+                with c2:
+
+                    t_owner = st.text_input("ผู้แจ้ง", value=str(row.get("ผู้แจ้ง","")))
+
+                    t_status = st.selectbox("สถานะ", ["เปิด","กำลังดำเนินการ","ปิด"], index=0)
+
+                t_desc = st.text_area("รายละเอียด", value=str(row.get("รายละเอียด","")), height=120)
+
+
+
+                fcol1, fcol2, fcol3 = st.columns(3)
+
+                submit_update = fcol1.form_submit_button("อัปเดต")
+
+                submit_delete = fcol3.form_submit_button("ลบรายการ")
+
+
+
+            if submit_update:
+
+                # TODO: update the row in your sheet/dataframe using pick_id
+
+                pass
+
+            if submit_delete:
+
+                # TODO: delete the row in your sheet/dataframe using pick_id
+
+                pass
 def page_stock(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("📦 คลังอุปกรณ์")
     items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS); cats  = read_df(sh, SHEET_CATS, CATS_HEADERS)
