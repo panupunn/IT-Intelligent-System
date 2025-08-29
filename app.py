@@ -727,18 +727,52 @@ def page_tickets(sh):
                         t_type = st.selectbox("ประเภท", ["ฮาร์ดแวร์","ซอฟต์แวร์","เครือข่าย","อื่นๆ"], index=0 if str(row.get("ประเภท",""))=="" else 3)
                     with c2:
                         t_owner = st.text_input("ผู้แจ้ง", value=str(row.get("ผู้แจ้ง","")))
-                        t_status = st.selectbox("สถานะ", ["เปิด","กำลังดำเนินการ","ปิด"], index=0)
+                        statuses_edit = ["รับแจ้ง","กำลังดำเนินการ","ดำเนินการเสร็จ"]
+                        try:
+                            idx_default = statuses_edit.index(str(row.get("สถานะ","รับแจ้ง")))
+                        except ValueError:
+                            idx_default = 0
+                        t_status = st.selectbox("สถานะ", statuses_edit, index=idx_default)
+                        t_assignee = st.text_input("ผู้รับผิดชอบ", value=str(row.get("ผู้รับผิดชอบ","")))
                     t_desc = st.text_area("รายละเอียด", value=str(row.get("รายละเอียด","")), height=120)
         
+                    t_note = st.text_input("หมายเหตุ", value=str(row.get("หมายเหตุ","")))
                     fcol1, fcol2, fcol3 = st.columns(3)
                     submit_update = fcol1.form_submit_button("อัปเดต")
                     submit_delete = fcol3.form_submit_button("ลบรายการ")
         
                 if submit_update:
-                    # TODO: update the row in your sheet/dataframe using pick_id
-                    pass
+                    # อัปเดตแถวตาม TicketID ที่เลือก แล้วบันทึกกลับไปยังชีต
+                    try:
+                        idx = tickets.index[tickets["TicketID"] == pick_id]
+                        if len(idx) == 1:
+                            idx0 = idx[0]
+                            tickets.at[idx0, "สาขา"] = t_branch
+                            tickets.at[idx0, "ผู้แจ้ง"] = t_owner
+                            tickets.at[idx0, "รายละเอียด"] = t_desc
+                            tickets.at[idx0, "สถานะ"] = t_status
+                            tickets.at[idx0, "ผู้รับผิดชอบ"] = t_assignee
+                            tickets.at[idx0, "หมายเหตุ"] = t_note
+                            tickets.at[idx0, "อัปเดตล่าสุด"] = get_now_str()
+                            write_df(sh, SHEET_TICKETS, tickets)
+                            st.success("อัปเดตสถานะ/รายละเอียดเรียบร้อย")
+                            safe_rerun()
+                        else:
+                            st.error("ไม่พบ Ticket ที่เลือก หรือมีมากกว่าหนึ่งรายการ")
+                    except Exception as e:
+                        st.error(f"อัปเดตไม่สำเร็จ: {e}")
                 if submit_delete:
-                    # TODO: delete the row in your sheet/dataframe using pick_id
+                    # ลบแถวตาม TicketID ที่เลือก แล้วบันทึกกลับไปยังชีต
+                    try:
+                        tickets2 = tickets[tickets["TicketID"] != pick_id].copy()
+                        if len(tickets2) == len(tickets):
+                            st.warning("ไม่พบ Ticket ที่จะลบ")
+                        else:
+                            write_df(sh, SHEET_TICKETS, tickets2)
+                            st.success("ลบรายการเรียบร้อย")
+                            safe_rerun()
+                    except Exception as e:
+                        st.error(f"ลบไม่สำเร็จ: {e}")
                     pass
 def page_stock(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("📦 คลังอุปกรณ์")
