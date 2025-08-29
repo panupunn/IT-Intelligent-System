@@ -11,7 +11,7 @@ v11:
 - รวมทุกฟีเจอร์จาก v10 (Dashboard, Stock, เบิก/รับ, รายงาน, Users, นำเข้า/แก้ไข หมวดหมู่, Settings + Clear test data)
 """
 import os, io, uuid, re, time
-from datetime import datetime, timedelta, date, time as dtime
+from datetime import datetime, date, timedelta, timedelta, date, time as dtime
 import pytz, pandas as pd, streamlit as st
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
@@ -550,7 +550,7 @@ def get_loc_options(items_df):
 
 
 def generate_ticket_id() -> str:
-    from datetime import datetime
+    from datetime import datetime, date, timedelta
     return "TCK-" + datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
 
 def page_tickets(sh):
@@ -580,9 +580,9 @@ def page_tickets(sh):
     # Date filter
     dcol1, dcol2 = st.columns(2)
     with dcol1:
-        d1 = st.date_input("วันที่เริ่ม", key="tk_d1")
+        d1 = st.date_input("วันที่เริ่ม", value=(date.today()-timedelta(days=90)), key="tk_d1")
     with dcol2:
-        d2 = st.date_input("วันที่สิ้นสุด", key="tk_d2")
+        d2 = st.date_input("วันที่สิ้นสุด", value=date.today(), key="tk_d2")
 
     view = tickets.copy()
     if not view.empty:
@@ -604,7 +604,15 @@ def page_tickets(sh):
                     view["รายละเอียด"].str.contains(q, case=False, na=False))
             view = view[mask]
 
-    st.markdown("### รายการแจ้งปัญหา")
+    
+    # Fallback: if filtering makes it empty, show latest 50 tickets
+    if not tickets.empty and view.empty:
+        tmp = tickets.copy()
+        if "วันที่แจ้ง" in tmp.columns:
+            tmp["วันที่แจ้ง"] = pd.to_datetime(tmp["วันที่แจ้ง"], errors="coerce")
+            tmp = tmp.dropna(subset=["วันที่แจ้ง"]).sort_values("วันที่แจ้ง", ascending=False)
+        view = tmp.head(50)
+st.markdown("### รายการแจ้งปัญหา")
     st.dataframe(view.sort_values("วันที่แจ้ง", ascending=False) if not view.empty else view,
                  use_container_width=True, height=300)
 
@@ -840,7 +848,7 @@ def page_issue_out_multi5(sh):
             new_remain = remain - qty
             items_local.loc[items_local["รหัส"]==code_sel, "คงเหลือ"] = str(new_remain)
 
-            from datetime import datetime
+            from datetime import datetime, date, timedelta
             txn = [str(uuid.uuid4())[:8], datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"),
                    "OUT", code_sel, row_sel["ชื่ออุปกรณ์"], branch_code, str(qty), get_username(), note]
             txns = pd.concat([txns, pd.DataFrame([txn], columns=TXNS_HEADERS)], ignore_index=True)
