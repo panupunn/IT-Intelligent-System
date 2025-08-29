@@ -71,7 +71,7 @@ def safe_rerun():
         safe_rerun()
 
 
-APP_TITLE = "ไอต้าว ไอที (iTao IT)"
+APP_TITLE = "ไอต้าว ไอที (iTao iT)"
 APP_TAGLINE = "POWER By ทีมงาน=> ไอทีสุดหล่อ"
 DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/1SGKzZ9WKkRtcmvN3vZj9w2yeM6xNoB6QV3-gtnJY-Bw/edit?gid=0#gid=0"
 CREDENTIALS_FILE = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "service_account.json")
