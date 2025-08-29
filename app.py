@@ -641,10 +641,22 @@ def page_tickets(sh):
         if tickets.empty:
             st.info("ยังไม่มีรายการในชีต Tickets")
         else:
-            ids = tickets["TicketID"].tolist()
-            pick = st.selectbox("เลือก Ticket", options=["-- เลือก --"]+ids, key="tk_pick")
-            if pick != "-- เลือก --":
-                row = tickets[tickets["TicketID"]==pick].iloc[0]
+        labels = []
+        for _idx, _r in tickets.iterrows():
+            _branch_raw = str(_r.get("สาขา","")).strip()
+            # If stored as "รหัส | ชื่อ", extract only ชื่อสาขา
+            if " | " in _branch_raw:
+                try:
+                    _branch_name = _branch_raw.split(" | ", 1)[1].strip() or _branch_raw
+                except Exception:
+                    _branch_name = _branch_raw
+            else:
+                _branch_name = _branch_raw or "ไม่ระบุสาขา"
+            labels.append(f'{_r["TicketID"]} | {_branch_name}')
+        pick_label = st.selectbox("เลือก Ticket", options=["-- เลือก --"] + labels, key="tk_pick")
+        if pick_label != "-- เลือก --":
+            pick_id = pick_label.split(" | ", 1)[0]
+            row = tickets[tickets["TicketID"] == pick_id].iloc[0]
                 with st.form("tk_edit", clear_on_submit=False):
                     c1,c2,c3 = st.columns(3)
                     with c1:
@@ -670,12 +682,12 @@ def page_tickets(sh):
                 if save or done or delete:
                     df = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
                     if delete:
-                        df = df[df["TicketID"] != pick]
+                        df = df[df["TicketID"] != pick_id]
                         write_df(sh, SHEET_TICKETS, df)
                         st.success("ลบแล้ว"); safe_rerun()
                     else:
                         if done: status = "ดำเนินการเสร็จ"
-                        df.loc[df["TicketID"]==pick, ["สาขา","ผู้แจ้ง","หมวดหมู่","รายละเอียด","สถานะ","ผู้รับผิดชอบ","อัปเดตล่าสุด","หมายเหตุ"]] = \
+                        df.loc[df["TicketID"]==pick_id, ["สาขา","ผู้แจ้ง","หมวดหมู่","รายละเอียด","สถานะ","ผู้รับผิดชอบ","อัปเดตล่าสุด","หมายเหตุ"]] = \
                             [branch, reporter, cate, detail, status, assignee, get_now_str(), note]
                         write_df(sh, SHEET_TICKETS, df)
                         st.success("อัปเดตแล้ว"); safe_rerun()
