@@ -641,7 +641,7 @@ def page_tickets(sh):
         if tickets.empty:
             st.info("ยังไม่มีรายการในชีต Tickets")
         else:
-        labels = []
+                labels = []
         for _idx, _r in tickets.iterrows():
             _branch_raw = str(_r.get("สาขา","")).strip()
             # If stored as "รหัส | ชื่อ", extract only ชื่อสาขา
