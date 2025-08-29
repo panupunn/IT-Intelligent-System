@@ -740,16 +740,16 @@ def page_dashboard(sh):
         titles_all = [t for t,_,_,_ in charts]
         if len(titles_all) > 0:
             with st.expander("พิมพ์/ดาวน์โหลดกราฟเป็น PDF", expanded=False):
-            # ฟอนต์ภาษาไทยสำหรับ PDF (อัปโหลดครั้งแรกครั้งเดียว)
-            up = st.file_uploader("อัปโหลดฟอนต์ไทย (.ttf) เพื่อให้ PDF แสดงไทยถูกต้อง", type=["ttf"], accept_multiple_files=False)
-            if up is not None:
-                save_path = "/mnt/data/thai_font.ttf"
-                with open(save_path, "wb") as f:
-                    f.write(up.read())
-                st.session_state["thai_font_path"] = save_path
-                st.success("บันทึกฟอนต์ไทยแล้ว: จะใช้ในการสร้าง PDF")
-            if "thai_font_path" in st.session_state:
-                st.caption(f"ใช้ฟอนต์ไทยจาก: {st.session_state['thai_font_path']}")
+                # ฟอนต์ภาษาไทยสำหรับ PDF (อัปโหลดครั้งแรกครั้งเดียว)
+                up = st.file_uploader("อัปโหลดฟอนต์ไทย (.ttf) เพื่อให้ PDF แสดงไทยถูกต้อง", type=["ttf"], accept_multiple_files=False)
+                if up is not None:
+                    save_path = "/mnt/data/thai_font.ttf"
+                    with open(save_path, "wb") as f:
+                        f.write(up.read())
+                    st.session_state["thai_font_path"] = save_path
+                    st.success("บันทึกฟอนต์ไทยแล้ว: จะใช้ในการสร้าง PDF")
+                if "thai_font_path" in st.session_state:
+                    st.caption("ใช้ฟอนต์ไทยจาก: " + st.session_state["thai_font_path"])
                 sel = st.multiselect("เลือกกราฟที่จะพิมพ์เป็น PDF", options=titles_all, default=titles_all[:min(2,len(titles_all))])
                 if sel:
                     pdf_bytes = export_charts_to_pdf(charts, sel, chart_kind)
