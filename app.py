@@ -955,6 +955,9 @@ def page_reports(sh):
     st.subheader("📑 รายงาน / ประวัติ")
 
     txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
+    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
+    br_map = {str(r["รหัสสาขา"]).strip(): f'{str(r["รหัสสาขา"]).strip()} | {str(r["ชื่อสาขา"]).strip()}' for _, r in branches.iterrows()} if not branches.empty else {}
+
     tickets = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
 
     # ---------- Quick range state ----------
@@ -1054,7 +1057,11 @@ def page_reports(sh):
     with tOut:
         out_df = df_f[df_f["ประเภท"] == "OUT"].copy().sort_values("วันเวลา", ascending=False)
         cols = [c for c in ["วันเวลา", "ชื่ออุปกรณ์", "จำนวน", "สาขา", "ผู้ดำเนินการ", "หมายเหตุ", "รหัส"] if c in out_df.columns]
-        st.dataframe(out_df[cols], use_container_width=True, height=320)
+        
+        if "out_df" in locals() and isinstance(out_df, pd.DataFrame) and not out_df.empty and "สาขา" in out_df.columns:
+            out_df["สาขาแสดง"] = out_df["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
+            out_df = out_df.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
+st.dataframe(out_df[cols], use_container_width=True, height=320)
         pdf = df_to_pdf_bytes(
             out_df[cols].rename(columns={"วันเวลา":"วันที่-เวลา","ชื่ออุปกรณ์":"อุปกรณ์","จำนวน":"จำนวนที่เบิก","สาขา":"ปลายทาง"}),
             title="รายละเอียดการเบิก (OUT)", subtitle=f"ช่วง {d1} ถึง {d2}"
@@ -1066,14 +1073,22 @@ def page_reports(sh):
         st.markdown("#### ตารางรายการแจ้งปัญหา")
         show_cols = [c for c in ["วันที่แจ้ง","เรื่อง","รายละเอียด","สาขา","ผู้แจ้ง","สถานะ","ผู้รับผิดชอบ","หมายเหตุ","TicketID"] if c in tdf.columns]
         tdf_sorted = tdf.sort_values("วันที่แจ้ง", ascending=False)
-        st.dataframe(tdf_sorted[show_cols], use_container_width=True, height=320)
+        
+        if "tdf_sorted" in locals() and isinstance(tdf_sorted, pd.DataFrame) and not tdf_sorted.empty and "สาขา" in tdf_sorted.columns:
+            tdf_sorted["สาขาแสดง"] = tdf_sorted["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
+            tdf_sorted = tdf_sorted.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
+st.dataframe(tdf_sorted[show_cols], use_container_width=True, height=320)
 
         st.markdown("#### สรุปจำนวนครั้งตาม 'เรื่อง' และ 'สาขา'")
         if not tdf.empty:
             agg = tdf.groupby(["เรื่อง","สาขา"])["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวนครั้ง"})
         else:
             agg = pd.DataFrame(columns=["เรื่อง","สาขา","จำนวนครั้ง"])
-        st.dataframe(agg.sort_values(["จำนวนครั้ง","เรื่อง"], ascending=[False, True]), use_container_width=True, height=260)
+        
+        if "agg" in locals() and isinstance(agg, pd.DataFrame) and not agg.empty and "สาขา" in agg.columns:
+            agg["สาขาแสดง"] = agg["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
+            agg = agg.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
+st.dataframe(agg.sort_values(["จำนวนครั้ง","เรื่อง"], ascending=[False, True]), use_container_width=True, height=260)
 
         pdf_t = df_to_pdf_bytes(agg.rename(columns={"เรื่อง":"ชื่อเรื่อง"}), title="สรุปการแจ้งปัญหา: เรื่อง × สาขา", subtitle=f"ช่วง {d1} ถึง {d2}")
         st.download_button("ดาวน์โหลด PDF สรุปการแจ้งปัญหา", data=pdf_t, file_name="ticket_summary_subject_branch.pdf", mime="application/pdf", key="dl_pdf_ticket_r")
@@ -1087,17 +1102,29 @@ def page_reports(sh):
 
     with tW:
         g = group_period(df_f, "W")
-        st.dataframe(g, use_container_width=True, height=220)
+        
+        if "g" in locals() and isinstance(g, pd.DataFrame) and not g.empty and "สาขา" in g.columns:
+            g["สาขาแสดง"] = g["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
+            g = g.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
+st.dataframe(g, use_container_width=True, height=220)
         st.download_button("ดาวน์โหลด PDF รายสัปดาห์", data=df_to_pdf_bytes(g, "สรุปรายสัปดาห์", f"ช่วง {d1} ถึง {d2}"), file_name="weekly_report.pdf", mime="application/pdf", key="dl_pdf_w_r")
 
     with tM:
         g = group_period(df_f, "ME")
-        st.dataframe(g, use_container_width=True, height=220)
+        
+        if "g" in locals() and isinstance(g, pd.DataFrame) and not g.empty and "สาขา" in g.columns:
+            g["สาขาแสดง"] = g["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
+            g = g.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
+st.dataframe(g, use_container_width=True, height=220)
         st.download_button("ดาวน์โหลด PDF รายเดือน", data=df_to_pdf_bytes(g, "สรุปรายเดือน", f"ช่วง {d1} ถึง {d2}"), file_name="monthly_report.pdf", mime="application/pdf", key="dl_pdf_m_r")
 
     with tY:
         g = group_period(df_f, "YE")
-        st.dataframe(g, use_container_width=True, height=220)
+        
+        if "g" in locals() and isinstance(g, pd.DataFrame) and not g.empty and "สาขา" in g.columns:
+            g["สาขาแสดง"] = g["สาขา"].apply(lambda v: br_map.get(str(v).split(" | ")[0], str(v) if "|" in str(v) else str(v)))
+            g = g.drop(columns=["สาขา"]).rename(columns={"สาขาแสดง":"สาขา"})
+st.dataframe(g, use_container_width=True, height=220)
         st.download_button("ดาวน์โหลด PDF รายปี", data=df_to_pdf_bytes(g, "สรุปรายปี", f"ช่วง {d1} ถึง {d2}"), file_name="yearly_report.pdf", mime="application/pdf", key="dl_pdf_y_r")
 
     st.markdown("</div>", unsafe_allow_html=True)
