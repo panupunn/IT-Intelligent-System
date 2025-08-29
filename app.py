@@ -409,7 +409,7 @@ def adjust_stock(sh, code, delta, actor, branch="", note="", txn_type="OUT", ts_
     append_row(sh, SHEET_TXNS, [str(uuid.uuid4())[:8], ts, txn_type, code, row["ชื่ออุปกรณ์"], branch, abs(delta), actor, note])
     return True
 
-def make_pie(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title: str):
+def make_pie(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title: str, font_prop=None, font_prop=prop):
     if df.empty or (value_col in df.columns and pd.to_numeric(df[value_col], errors="coerce").fillna(0).sum() == 0):
         st.info(f"ยังไม่มีข้อมูลสำหรับกราฟ: {title}")
         return
@@ -433,7 +433,7 @@ def make_pie(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title
     )
     st.altair_chart(chart, use_container_width=True)
 
-def make_bar(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title: str):
+def make_bar(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title: str, font_prop=None, font_prop=prop):
     if df.empty or (value_col in df.columns and pd.to_numeric(df[value_col], errors="coerce").fillna(0).sum() == 0):
         st.info(f"ยังไม่มีข้อมูลสำหรับกราฟ: {title}")
         return
@@ -493,7 +493,7 @@ def ensure_thai_font(font_path: str = None):
             matplotlib.rcParams["axes.unicode_minus"] = False
             matplotlib.rcParams["pdf.fonttype"] = 42
             matplotlib.rcParams["ps.fonttype"] = 42
-            return prop.get_name()
+            return prop
         except Exception:
             pass
 
@@ -517,6 +517,7 @@ def ensure_thai_font(font_path: str = None):
             break
     if chosen:
         try:
+            prop = fm.FontProperties(fname=available[chosen]) if chosen in available else fm.FontProperties(family=chosen)
             matplotlib.rcParams["font.family"] = chosen
             matplotlib.rcParams["axes.unicode_minus"] = False
             # Embed TrueType fonts into PDF to keep Thai glyphs
@@ -525,18 +526,22 @@ def ensure_thai_font(font_path: str = None):
         except Exception:
             pass
     else:
-        # Fall back to DejaVu Sans but keep embedding settings; user may upload Thai TTF later
+        # Fall back to DejaVu Sans but keep embedding settings
         try:
+            from matplotlib import font_manager as fm
+            prop = fm.FontProperties(family="DejaVu Sans")
             matplotlib.rcParams["font.family"] = "DejaVu Sans"
             matplotlib.rcParams["axes.unicode_minus"] = False
             matplotlib.rcParams["pdf.fonttype"] = 42
             matplotlib.rcParams["ps.fonttype"] = 42
         except Exception:
-            pass
+            prop = None
+        
+
 def export_charts_to_pdf(charts, selected_titles, chart_kind):
     """Build a PDF (bytes) of selected charts. charts: list of (title, df, label_col, value_col)."""
     font_path = st.session_state.get("thai_font_path") if "thai_font_path" in st.session_state else None
-    ensure_thai_font(font_path)
+    prop = ensure_thai_font(font_path)
     import pandas as pd
     from io import BytesIO
 
@@ -767,7 +772,7 @@ def page_dashboard(sh):
                 if idx >= len(charts): break
                 title, df, label_col, value_col = charts[idx]
                 with cols[c]:
-                    make_bar(df, label_col, value_col, top_n, title) if chart_kind.endswith('(Bar)') else make_pie(df, label_col, value_col, top_n, title)
+                    make_bar(df, label_col, value_col, top_n, title, font_prop=prop) if chart_kind.endswith('(Bar)') else make_pie(df, label_col, value_col, top_n, title, font_prop=prop)
                 idx += 1
 
     items_num = items.copy()
