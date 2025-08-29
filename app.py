@@ -72,7 +72,7 @@ def safe_rerun():
 
 
 APP_TITLE = "IT Intelligent System"
-APP_TAGLINE = "Minimal, Modern, and Practical"
+APP_TAGLINE = "POWER By ทีมงาน=> ไอทีสุดหล่อ"
 DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/1SGKzZ9WKkRtcmvN3vZj9w2yeM6xNoB6QV3-gtnJY-Bw/edit?gid=0#gid=0"
 CREDENTIALS_FILE = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "service_account.json")
 
@@ -474,96 +474,6 @@ def make_bar(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title
     )
     st.altair_chart(chart, use_container_width=True)
 
-import matplotlib
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-
-
-# --- Thai font helper for PDF/Matplotlib ---
-def ensure_thai_font():
-    import matplotlib
-    from matplotlib import font_manager as fm
-    # Prefer common Thai fonts if available on the system
-    preferred = [
-        "Noto Sans Thai","Sarabun","TH Sarabun New","Kanit","Prompt",
-        "Tahoma","Leelawadee UI","Cordia New","Angsana New"
-    ]
-    available = {f.name: f.fname for f in fm.fontManager.ttflist}
-    chosen = None
-    for name in preferred:
-        # some backends store 'TH Sarabun New' as 'THSarabunNew' or similar
-        for fam, path in available.items():
-            low = fam.lower().replace(" ", "")
-            if name.lower().replace(" ", "") in low:
-                chosen = fam
-                break
-        if chosen:
-            break
-    if chosen:
-        try:
-            matplotlib.rcParams["font.family"] = chosen
-            matplotlib.rcParams["axes.unicode_minus"] = False
-            # Embed TrueType fonts into PDF to keep Thai glyphs
-            matplotlib.rcParams["pdf.fonttype"] = 42
-            matplotlib.rcParams["ps.fonttype"] = 42
-        except Exception:
-            pass
-    else:
-        # Fall back to DejaVu Sans but keep embedding settings; user may upload Thai TTF later
-        try:
-            matplotlib.rcParams["font.family"] = "DejaVu Sans"
-            matplotlib.rcParams["axes.unicode_minus"] = False
-            matplotlib.rcParams["pdf.fonttype"] = 42
-            matplotlib.rcParams["ps.fonttype"] = 42
-        except Exception:
-            pass
-def export_charts_to_pdf(charts, selected_titles, chart_kind):
-    """Build a PDF (bytes) of selected charts. charts: list of (title, df, label_col, value_col)."""
-    # Configure Thai-capable font once for Matplotlib (do NOT override with non‑Thai fonts)
-    ensure_thai_font()
-
-    import pandas as pd
-    from io import BytesIO
-
-    buf = BytesIO()
-    with PdfPages(buf) as pdf:
-        for title, df, label_col, value_col in charts:
-            if title not in selected_titles:
-                continue
-
-            data = df.copy()
-            # ensure numeric column
-            if value_col in data.columns:
-                data[value_col] = pd.to_numeric(data[value_col], errors="coerce").fillna(0)
-
-            # Create figure for each chart
-            plt.figure()
-            if chart_kind.endswith("(Bar)"):
-                labels = data[label_col].astype(str) if label_col in data.columns else []
-                vals = data[value_col] if value_col in data.columns else []
-                plt.bar(labels, vals)
-                plt.xticks(rotation=45, ha="right")
-                plt.ylabel(value_col)
-            else:
-                vals = data[value_col] if value_col in data.columns else []
-                labels = data[label_col].astype(str) if label_col in data.columns else []
-                if getattr(vals, "sum", lambda:0)() > 0:
-                    plt.pie(vals, labels=labels, autopct="%1.1f%%")
-                else:
-                    # Avoid zero-sum pie by falling back to bar
-                    plt.bar(labels, vals)
-                    plt.xticks(rotation=45, ha="right")
-                    plt.ylabel(value_col)
-
-            # Title in Thai is handled by rcParams set in ensure_thai_font()
-            plt.title(title)
-            plt.tight_layout()
-            pdf.savefig()
-            plt.close()
-
-    buf.seek(0)
-    return buf.getvalue()
-
 def parse_range(choice: str, d1: date=None, d2: date=None):
     today = datetime.now(TZ).date()
     if choice == "วันนี้":
@@ -720,16 +630,6 @@ def page_dashboard(sh):
     if len(charts)==0:
         st.info("โปรดเลือกกราฟที่ต้องการแสดงจากด้านบน")
     else:
-        # ====== พิมพ์/ดาวน์โหลดกราฟเป็น PDF ======
-        titles_all = [t for t,_,_,_ in charts]
-        if len(titles_all) > 0:
-            with st.expander("พิมพ์/ดาวน์โหลดกราฟเป็น PDF", expanded=False):
-                sel = st.multiselect("เลือกกราฟที่จะพิมพ์เป็น PDF", options=titles_all, default=titles_all[:min(2,len(titles_all))])
-                if sel:
-                    pdf_bytes = export_charts_to_pdf(charts, sel, chart_kind)
-                    st.download_button("ดาวน์โหลด PDF กราฟที่เลือก", data=pdf_bytes, file_name="dashboard_charts.pdf", mime="application/pdf")
-        # =========================================
-
         rows = (len(charts) + per_row - 1) // per_row
         idx = 0
         for r in range(rows):
