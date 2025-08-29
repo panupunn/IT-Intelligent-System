@@ -519,46 +519,46 @@ def ensure_thai_font():
             pass
 def export_charts_to_pdf(charts, selected_titles, chart_kind):
     """Build a PDF (bytes) of selected charts. charts: list of (title, df, label_col, value_col)."""
+    # Configure Thai-capable font once for Matplotlib (do NOT override with non‑Thai fonts)
     ensure_thai_font()
+
     import pandas as pd
     from io import BytesIO
-
-    # Use DejaVu Sans which supports Thai well
-    try:
-        matplotlib.rcParams['font.family'] = 'DejaVu Sans'
-    except Exception:
-        pass
 
     buf = BytesIO()
     with PdfPages(buf) as pdf:
         for title, df, label_col, value_col in charts:
             if title not in selected_titles:
                 continue
+
             data = df.copy()
-            # ensure numeric
+            # ensure numeric column
             if value_col in data.columns:
                 data[value_col] = pd.to_numeric(data[value_col], errors="coerce").fillna(0)
 
+            # Create figure for each chart
             plt.figure()
             if chart_kind.endswith("(Bar)"):
-                # bar
-                plt.bar(data[label_col].astype(str), data[value_col])
+                labels = data[label_col].astype(str) if label_col in data.columns else []
+                vals = data[value_col] if value_col in data.columns else []
+                plt.bar(labels, vals)
                 plt.xticks(rotation=45, ha="right")
                 plt.ylabel(value_col)
             else:
-                # pie
-                vals = data[value_col]
-                labels = data[label_col].astype(str)
-                if vals.sum() > 0:
+                vals = data[value_col] if value_col in data.columns else []
+                labels = data[label_col].astype(str) if label_col in data.columns else []
+                if getattr(vals, "sum", lambda:0)() > 0:
                     plt.pie(vals, labels=labels, autopct="%1.1f%%")
                 else:
-                    # avoid zero-sum pie
+                    # Avoid zero-sum pie by falling back to bar
                     plt.bar(labels, vals)
                     plt.xticks(rotation=45, ha="right")
                     plt.ylabel(value_col)
+
+            # Title in Thai is handled by rcParams set in ensure_thai_font()
             plt.title(title)
             plt.tight_layout()
-            pdf.savefig()  # saves the current figure
+            pdf.savefig()
             plt.close()
 
     buf.seek(0)
@@ -1861,7 +1861,7 @@ def main():
     elif page.startswith("📑"): page_reports(sh)
     elif page.startswith("👤") or page.startswith("👥"): page_users_admin(sh)
     elif page.startswith("นำเข้า") or page.startswith("🗂️"): page_import(sh)
-    st.caption("© 2025 IT Stock · Streamlit + Google Sheets By. AOD")
+    st.caption("© 2025 IT Stock · Streamlit + Google Sheets By AOD.")
 
 if __name__ == "__main__":
     main()
