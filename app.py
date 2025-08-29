@@ -478,8 +478,48 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
+
+# --- Thai font helper for PDF/Matplotlib ---
+def ensure_thai_font():
+    import matplotlib
+    from matplotlib import font_manager as fm
+    # Prefer common Thai fonts if available on the system
+    preferred = [
+        "Noto Sans Thai","Sarabun","TH Sarabun New","Kanit","Prompt",
+        "Tahoma","Leelawadee UI","Cordia New","Angsana New"
+    ]
+    available = {f.name: f.fname for f in fm.fontManager.ttflist}
+    chosen = None
+    for name in preferred:
+        # some backends store 'TH Sarabun New' as 'THSarabunNew' or similar
+        for fam, path in available.items():
+            low = fam.lower().replace(" ", "")
+            if name.lower().replace(" ", "") in low:
+                chosen = fam
+                break
+        if chosen:
+            break
+    if chosen:
+        try:
+            matplotlib.rcParams["font.family"] = chosen
+            matplotlib.rcParams["axes.unicode_minus"] = False
+            # Embed TrueType fonts into PDF to keep Thai glyphs
+            matplotlib.rcParams["pdf.fonttype"] = 42
+            matplotlib.rcParams["ps.fonttype"] = 42
+        except Exception:
+            pass
+    else:
+        # Fall back to DejaVu Sans but keep embedding settings; user may upload Thai TTF later
+        try:
+            matplotlib.rcParams["font.family"] = "DejaVu Sans"
+            matplotlib.rcParams["axes.unicode_minus"] = False
+            matplotlib.rcParams["pdf.fonttype"] = 42
+            matplotlib.rcParams["ps.fonttype"] = 42
+        except Exception:
+            pass
 def export_charts_to_pdf(charts, selected_titles, chart_kind):
     """Build a PDF (bytes) of selected charts. charts: list of (title, df, label_col, value_col)."""
+    ensure_thai_font()
     import pandas as pd
     from io import BytesIO
 
