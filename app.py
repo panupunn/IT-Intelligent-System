@@ -1071,3 +1071,463 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+# ======================= OVERRIDES: checkbox-select edit for Stock / Tickets / Users =======================
+import pandas as _pd
+import streamlit as _st
+
+def page_stock(sh):
+    _st.markdown("<div class='block-card'>", unsafe_allow_html=True)
+    _st.subheader("📦 คลังอุปกรณ์")
+
+    items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
+    cats  = read_df(sh, SHEET_CATS, CATS_HEADERS)
+
+    # --- Search & Data table with checkbox select ---
+    q = _st.text_input("ค้นหา (รหัส/ชื่อ/หมวด)")
+    view_df = items.copy()
+    if q and not items.empty:
+        mask = (
+            items["รหัส"].astype(str).str.contains(q, case=False, na=False) |
+            items["ชื่ออุปกรณ์"].astype(str).str.contains(q, case=False, na=False) |
+            items["หมวดหมู่"].astype(str).str.contains(q, case=False, na=False)
+        )
+        view_df = items[mask]
+
+    chosen_code = None
+    if hasattr(_st, "data_editor"):
+        view_display = view_df.copy()
+        view_display.insert(0, "เลือก", False)
+        edited_table = _st.data_editor(
+            view_display[["เลือก"] + ITEMS_HEADERS],
+            use_container_width=True, height=320, num_rows="fixed",
+            column_config={"เลือก": _st.column_config.CheckboxColumn(help="ติ๊กเพื่อเลือกสำหรับแก้ไข")}
+        )
+        picked = edited_table[edited_table["เลือก"] == True]
+        if not picked.empty:
+            chosen_code = str(picked.iloc[0]["รหัส"]).strip()
+    else:
+        _st.dataframe(view_df, height=320, use_container_width=True)
+
+    unit_opts = get_unit_options(items)
+    loc_opts  = get_loc_options(items)
+
+    if _st.session_state.get("role") in ("admin","staff"):
+        t_add, t_edit = _st.tabs(["➕ เพิ่ม/อัปเดต (รหัสใหม่)","✏️ แก้ไข/ลบ (เลือกจากตาราง)"])
+
+        with t_add:
+            with _st.form("item_add", clear_on_submit=True):
+                c1,c2,c3 = _st.columns(3)
+                with c1:
+                    if cats.empty:
+                        _st.info("ยังไม่มีหมวดหมู่ในชีต Categories (ใช้เมนู นำเข้า/แก้ไข หมวดหมู่ เพื่อเพิ่ม)")
+                        cat_opt=""
+                    else:
+                        opts = (cats["รหัสหมวด"]+" | "+cats["ชื่อหมวด"]).tolist()
+                        selected = _st.selectbox("หมวดหมู่", options=opts)
+                        cat_opt = selected.split(" | ")[0]
+                    name = _st.text_input("ชื่ออุปกรณ์")
+                with c2:
+                    sel_unit = _st.selectbox("หน่วย (เลือกจากรายการ)", options=unit_opts, index=0)
+                    unit = _st.text_input("ระบุหน่วยใหม่", value="", disabled=(sel_unit!="พิมพ์เอง"))
+                    if sel_unit!="พิมพ์เอง": unit = sel_unit
+                    qty = _st.number_input("คงเหลือ", min_value=0, value=0, step=1)
+                    rop = _st.number_input("จุดสั่งซื้อ", min_value=0, value=0, step=1)
+                with c3:
+                    sel_loc = _st.selectbox("ที่เก็บ (เลือกจากรายการ)", options=loc_opts, index=0)
+                    loc = _st.text_input("ระบุที่เก็บใหม่", value="", disabled=(sel_loc!="พิมพ์เอง"))
+                    if sel_loc!="พิมพ์เอง": loc = sel_loc
+                    active = _st.selectbox("ใช้งาน", ["Y","N"], index=0)
+                    auto_code = _st.checkbox("สร้างรหัสอัตโนมัติ", value=True)
+                    code = _st.text_input("รหัสอุปกรณ์ (ถ้าไม่ออโต้)", disabled=auto_code)
+                    s_add = _st.form_submit_button("บันทึก/อัปเดต", use_container_width=True)
+            if s_add:
+                if (auto_code and not cat_opt) or (not auto_code and code.strip()==""):
+                    _st.error("กรุณาเลือกหมวด/ระบุรหัส")
+                else:
+                    items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
+                    gen_code = generate_item_code(sh, cat_opt) if auto_code else code.strip().upper()
+                    if (items["รหัส"]==gen_code).any():
+                        items.loc[items["รหัส"]==gen_code, ITEMS_HEADERS] = [gen_code, cat_opt, name, unit, qty, rop, loc, active]
+                    else:
+                        items = _pd.concat([items, _pd.DataFrame([[gen_code, cat_opt, name, unit, qty, rop, loc, active]], columns=ITEMS_HEADERS)], ignore_index=True)
+                    write_df(sh, SHEET_ITEMS, items)
+                    _st.success(f"บันทึกเรียบร้อย (รหัส: {gen_code})")
+                    safe_rerun()
+
+        with t_edit:
+            if not chosen_code:
+                _st.info("ติ๊กเลือกรายการในตารางด้านบนเพื่อแก้ไข หรือเลือกรายการเดิมด้วยตัวเลือกด้านล่าง")
+            # Fallback dropdown for editing
+            if items.empty:
+                _st.info("ยังไม่มีรายการให้แก้ไข")
+            else:
+                labels = (items["รหัส"] + " | " + items["ชื่ออุปกรณ์"]).tolist()
+                default_index = 0
+                if chosen_code:
+                    try:
+                        default_index = ["-- เลือก --"] + labels
+                        default_index = default_index.index(f"{chosen_code} | {items[items['รหัส']==chosen_code].iloc[0]['ชื่ออุปกรณ์']}")
+                    except Exception:
+                        default_index = 0
+                pick_label = _st.selectbox("เลือกรหัสอุปกรณ์", options=["-- เลือก --"] + labels)
+                if chosen_code:
+                    # override by chosen
+                    for lab in labels:
+                        if lab.startswith(chosen_code + " "):
+                            pick_label = lab
+                            break
+                if pick_label != "-- เลือก --":
+                    pick = pick_label.split(" | ", 1)[0]
+                    row = items[items["รหัส"] == pick].iloc[0]
+                    # Build option lists that include current values
+                    unit_opts_edit = [u for u in unit_opts if u != "พิมพ์เอง"]
+                    if row["หน่วย"] not in unit_opts_edit and str(row["หน่วย"]).strip()!="":
+                        unit_opts_edit = [row["หน่วย"]] + unit_opts_edit
+                    unit_opts_edit = unit_opts_edit + ["พิมพ์เอง"]
+
+                    loc_opts_edit = [l for l in loc_opts if l != "พิมพ์เอง"]
+                    if row["ที่เก็บ"] not in loc_opts_edit and str(row["ที่เก็บ"]).strip()!="":
+                        loc_opts_edit = [row["ที่เก็บ"]] + loc_opts_edit
+                    loc_opts_edit = loc_opts_edit + ["พิมพ์เอง"]
+
+                    with _st.form("item_edit", clear_on_submit=False):
+                        c1,c2,c3 = _st.columns(3)
+                        with c1:
+                            name = _st.text_input("ชื่ออุปกรณ์", value=row["ชื่ออุปกรณ์"])
+                            sel_unit = _st.selectbox("หน่วย (เลือกจากรายการ)", options=unit_opts_edit, index=0)
+                            unit = _st.text_input("ระบุหน่วยใหม่", value="", disabled=(sel_unit!="พิมพ์เอง"))
+                            if sel_unit!="พิมพ์เอง": unit = sel_unit
+                        with c2:
+                            qty = _st.number_input("คงเหลือ", min_value=0, value=int(float(row["คงเหลือ"]) if str(row["คงเหลือ"]).strip()!="" else 0), step=1)
+                            rop = _st.number_input("จุดสั่งซื้อ", min_value=0, value=int(float(row["จุดสั่งซื้อ"]) if str(row["จุดสั่งซื้อ"]).strip()!="" else 0), step=1)
+                        with c3:
+                            sel_loc = _st.selectbox("ที่เก็บ (เลือกจากรายการ)", options=loc_opts_edit, index=0)
+                            loc = _st.text_input("ระบุที่เก็บใหม่", value="", disabled=(sel_loc!="พิมพ์เอง"))
+                            if sel_loc!="พิมพ์เอง": loc = sel_loc
+                            active = _st.selectbox("ใช้งาน", ["Y","N"], index=0 if str(row["ใช้งาน"]).upper()=="Y" else 1)
+                        col_save, col_delete = _st.columns([3,1])
+                        s_save = col_save.form_submit_button("💾 บันทึกการแก้ไข", use_container_width=True)
+                        s_del  = col_delete.form_submit_button("🗑️ ลบรายการ", use_container_width=True)
+                    if s_save:
+                        items.loc[items["รหัส"]==pick, ITEMS_HEADERS] = [pick, row["หมวดหมู่"], name, unit, qty, rop, loc, "Y" if active=="Y" else "N"]
+                        write_df(sh, SHEET_ITEMS, items)
+                        _st.success("อัปเดตแล้ว"); safe_rerun()
+                    if s_del:
+                        items = items[items["รหัส"]!=pick]; write_df(sh, SHEET_ITEMS, items)
+                        _st.success(f"ลบ {pick} แล้ว"); safe_rerun()
+
+    _st.markdown("</div>", unsafe_allow_html=True)
+
+
+def page_tickets(sh):
+    _st.markdown("<div class='block-card'>", unsafe_allow_html=True)
+    _st.subheader("🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets)")
+
+    tickets = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
+    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
+    t_cats = read_df(sh, SHEET_TICKET_CATS, TICKET_CAT_HEADERS)
+
+    # --- Filters ---
+    _st.markdown("### ตัวกรอง")
+    f1, f2, f3, f4 = _st.columns(4)
+    with f1:
+        statuses = ["ทั้งหมด","รับแจ้ง","กำลังดำเนินการ","ดำเนินการเสร็จ"]
+        status_pick = _st.selectbox("สถานะ", statuses, index=0, key="tk_status2")
+    with f2:
+        br_opts = ["ทั้งหมด"] + ((branches["รหัสสาขา"] + " | " + branches["ชื่อสาขา"]).tolist() if not branches.empty else [])
+        branch_pick = _st.selectbox("สาขา", br_opts, index=0, key="tk_branch2")
+    with f3:
+        cat_opts = ["ทั้งหมด"] + ((t_cats["รหัสหมวดปัญหา"] + " | " + t_cats["ชื่อหมวดปัญหา"]).tolist() if not t_cats.empty else [])
+        cat_pick = _st.selectbox("หมวดหมู่ปัญหา", cat_opts, index=0, key="tk_cat2")
+    with f4:
+        q = _st.text_input("ค้นหา (ผู้แจ้ง/หมวด/รายละเอียด)", key="tk_query2")
+
+    dcol1, dcol2 = _st.columns(2)
+    with dcol1:
+        d1 = _st.date_input("วันที่เริ่ม", value=(date.today()-timedelta(days=90)), key="tk_d1_2")
+    with dcol2:
+        d2 = _st.date_input("วันที่สิ้นสุด", value=date.today(), key="tk_d2_2")
+
+    view = tickets.copy()
+    if not view.empty:
+        view["วันที่แจ้ง"] = _pd.to_datetime(view["วันที่แจ้ง"], errors="coerce")
+        view = view.dropna(subset=["วันที่แจ้ง"])
+        view = view[(view["วันที่แจ้ง"].dt.date >= d1) & (view["วันที่แจ้ง"].dt.date <= d2)]
+        if status_pick != "ทั้งหมด":
+            view = view[view["สถานะ"] == status_pick]
+        if branch_pick != "ทั้งหมด":
+            view = view[view["สาขา"] == branch_pick]
+        if "cat_pick" in locals() and cat_pick != "ทั้งหมด":
+            view = view[view["หมวดหมู่"] == cat_pick]
+        if q:
+            mask = (view["ผู้แจ้ง"].astype(str).str.contains(q, case=False, na=False) |
+                    view["หมวดหมู่"].astype(str).str.contains(q, case=False, na=False) |
+                    view["รายละเอียด"].astype(str).str.contains(q, case=False, na=False))
+            view = view[mask]
+
+    # --- Table with checkbox select ---
+    _st.markdown("### รายการแจ้งปัญหา")
+    chosen_id = None
+    picked_ids = []
+    if hasattr(_st, "data_editor"):
+        tdisp = view.copy()
+        tdisp.insert(0, "เลือก", False)
+        ed = _st.data_editor(
+            tdisp[["เลือก"] + TICKETS_HEADERS],
+            use_container_width=True, height=300, num_rows="fixed",
+            column_config={"เลือก": _st.column_config.CheckboxColumn(help="ติ๊กเพื่อเลือก")}
+        )
+        pick = ed[ed["เลือก"]==True]
+        if not pick.empty:
+            picked_ids = pick["TicketID"].astype(str).tolist()
+            chosen_id = picked_ids[0]  # first for edit form
+    else:
+        _st.dataframe(view, height=300, use_container_width=True)
+
+    # --- Bulk close ---
+    if picked_ids:
+        if _st.button(f"ปิดงาน (เสร็จ) {len(picked_ids)} รายการ"):
+            cur = tickets.copy()
+            cur.loc[cur["TicketID"].astype(str).isin(picked_ids), "สถานะ"] = "ดำเนินการเสร็จ"
+            cur.loc[cur["TicketID"].astype(str).isin(picked_ids), "อัปเดตล่าสุด"] = get_now_str()
+            write_df(sh, SHEET_TICKETS, cur)
+            _st.success("อัปเดตสถานะเรียบร้อย")
+            safe_rerun()
+
+    _st.markdown("---")
+    t_add, t_update = _st.tabs(["➕ รับแจ้งใหม่","🔁 เปลี่ยนสถานะ/แก้ไข"])
+
+    with t_add:
+        with _st.form("tk_new2", clear_on_submit=True):
+            c1,c2,c3 = _st.columns(3)
+            with c1:
+                now_str = get_now_str()
+                branch_sel = _st.selectbox("สาขา", br_opts[1:] if len(br_opts)>1 else ["พิมพ์เอง"])
+                if branch_sel == "พิมพ์เอง":
+                    branch_sel = _st.text_input("ระบุสาขา (พิมพ์เอง)", value="")
+                reporter = _st.text_input("ผู้แจ้ง", value="")
+            with c2:
+                tkc_opts = ((t_cats["รหัสหมวดปัญหา"] + " | " + t_cats["ชื่อหมวดปัญหา"]).tolist() if not t_cats.empty else []) + ["พิมพ์เอง"]
+                pick_c = _st.selectbox("หมวดหมู่ปัญหา", options=tkc_opts if tkc_opts else ["พิมพ์เอง"], key="tk_new_cat_sel2")
+                cate_custom = _st.text_input("ระบุหมวด (ถ้าเลือกพิมพ์เอง)", value="" if pick_c!="พิมพ์เอง" else "", disabled=(pick_c!="พิมพ์เอง"))
+                cate = pick_c if pick_c != "พิมพ์เอง" else cate_custom
+                t_type = _st.selectbox("ประเภท", ["ฮาร์ดแวร์","ซอฟต์แวร์","เครือข่าย","อื่นๆ"], index=0)
+                assignee = _st.text_input("ผู้รับผิดชอบ (IT)", value=_st.session_state.get("user",""))
+            with c3:
+                detail = _st.text_area("รายละเอียด", height=100)
+                note = _st.text_input("หมายเหตุ", value="")
+            s = _st.form_submit_button("บันทึกการรับแจ้ง", use_container_width=True)
+        if s:
+            tid = generate_ticket_id()
+            row = [tid, get_now_str(), branch_sel, reporter, cate, detail, "รับแจ้ง", assignee, get_now_str(), note]
+            # ensure columns
+            cur = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
+            if "ประเภท" not in cur.columns:
+                cur["ประเภท"] = ""
+            new = _pd.DataFrame([row], columns=TICKETS_HEADERS)
+            new["ประเภท"] = t_type
+            cur = _pd.concat([cur, new], ignore_index=True)
+            write_df(sh, SHEET_TICKETS, cur)
+            _st.success(f"รับแจ้งเรียบร้อย (Ticket: {tid})")
+            safe_rerun()
+
+    with t_update:
+        target_id = chosen_id or _st.selectbox("เลือก Ticket (สำรอง)", [""] + tickets["TicketID"].astype(str).tolist())
+        if not target_id:
+            _st.info("ติ๊กเลือกรายการในตารางด้านบน หรือเลือกจากกล่องด้านบนเพื่อแก้ไข")
+        else:
+            row = tickets[tickets["TicketID"].astype(str) == str(target_id)]
+            if row.empty:
+                _st.warning("ไม่พบ Ticket ที่เลือก")
+            else:
+                data = row.iloc[0].to_dict()
+                with _st.form("tk_edit2", clear_on_submit=False):
+                    c1, c2 = _st.columns(2)
+                    with c1:
+                        t_branch = _st.text_input("สาขา", value=str(data.get("สาขา","")))
+                        t_type   = _st.selectbox("ประเภท", ["ฮาร์ดแวร์","ซอฟต์แวร์","เครือข่าย","อื่นๆ"],
+                                                 index=0 if str(data.get("ประเภท",""))=="" else 3)
+                    with c2:
+                        t_owner = _st.text_input("ผู้แจ้ง", value=str(data.get("ผู้แจ้ง","")))
+                        statuses_edit = ["รับแจ้ง","กำลังดำเนินการ","ดำเนินการเสร็จ"]
+                        try:
+                            idx_default = statuses_edit.index(str(data.get("สถานะ","รับแจ้ง")))
+                        except ValueError:
+                            idx_default = 0
+                        t_status = _st.selectbox("สถานะ", statuses_edit, index=idx_default)
+                        t_assignee = _st.text_input("ผู้รับผิดชอบ", value=str(data.get("ผู้รับผิดชอบ","")))
+                    t_desc = _st.text_area("รายละเอียด", value=str(data.get("รายละเอียด","")), height=120)
+                    t_note = _st.text_input("หมายเหตุ", value=str(data.get("หมายเหตุ","")))
+                    fcol1, fcol2, fcol3 = _st.columns(3)
+                    submit_update = fcol1.form_submit_button("อัปเดต")
+                    submit_close  = fcol2.form_submit_button("ปิดงาน (เสร็จ)")
+                    submit_delete = fcol3.form_submit_button("ลบรายการ")
+
+                if submit_update or submit_close:
+                    tickets2 = tickets.copy()
+                    idx = tickets2.index[tickets2["TicketID"].astype(str) == str(target_id)]
+                    if len(idx) == 1:
+                        idx0 = idx[0]
+                        tickets2.at[idx0, "สาขา"] = t_branch
+                        tickets2.at[idx0, "ผู้แจ้ง"] = t_owner
+                        tickets2.at[idx0, "รายละเอียด"] = t_desc
+                        tickets2.at[idx0, "สถานะ"] = "ดำเนินการเสร็จ" if submit_close else t_status
+                        tickets2.at[idx0, "ผู้รับผิดชอบ"] = t_assignee
+                        tickets2.at[idx0, "หมายเหตุ"] = t_note
+                        # ensure 'ประเภท'
+                        if "ประเภท" not in tickets2.columns:
+                            tickets2["ประเภท"] = ""
+                        tickets2.at[idx0, "ประเภท"] = t_type
+                        tickets2.at[idx0, "อัปเดตล่าสุด"] = get_now_str()
+                        write_df(sh, SHEET_TICKETS, tickets2)
+                        _st.success("บันทึกเรียบร้อย")
+                        safe_rerun()
+                    else:
+                        _st.error("ไม่พบรายการหรือพบหลายรายการ")
+
+                if submit_delete:
+                    tickets2 = tickets[tickets["TicketID"].astype(str) != str(target_id)].copy()
+                    write_df(sh, SHEET_TICKETS, tickets2)
+                    _st.success("ลบรายการแล้ว")
+                    safe_rerun()
+
+
+# Keep Users page as checkbox-select (redefine to ensure present)
+def page_users(sh):
+    _st.subheader("👥 ผู้ใช้ & สิทธิ์ (Admin)")
+
+    try:
+        users = read_df(sh, SHEET_USERS, USERS_HEADERS)
+    except Exception as e:
+        _st.error(f"โหลดข้อมูลผู้ใช้ไม่สำเร็จ: {e}")
+        return
+
+    base_cols = ["Username","DisplayName","Role","PasswordHash","Active"]
+    for col in base_cols:
+        if col not in users.columns:
+            users[col] = ""
+    users = users[base_cols].fillna("")
+
+    _st.markdown("#### 📋 รายชื่อผู้ใช้ (ติ๊ก 'เลือก' เพื่อแก้ไข)")
+    chosen_username = None
+    if hasattr(_st, "data_editor"):
+        users_display = users.copy()
+        users_display.insert(0, "เลือก", False)
+        edited_table = _st.data_editor(
+            users_display[["เลือก","Username","DisplayName","Role","PasswordHash","Active"]],
+            use_container_width=True, height=300, num_rows="fixed",
+            column_config={"เลือก": _st.column_config.CheckboxColumn(help="ติ๊กเพื่อเลือกผู้ใช้สำหรับแก้ไข")}
+        )
+        picked = edited_table[edited_table["เลือก"] == True]
+        if not picked.empty:
+            chosen_username = str(picked.iloc[0]["Username"])
+
+    tab_add, tab_edit = _st.tabs(["➕ เพิ่มผู้ใช้", "✏️ แก้ไขผู้ใช้"])
+
+    with tab_add:
+        with _st.form("form_add_user2", clear_on_submit=True):
+            c1, c2 = _st.columns([2,1])
+            with c1:
+                new_user = _st.text_input("Username*")
+                new_disp = _st.text_input("Display Name")
+            with c2:
+                new_role = _st.selectbox("Role", ["admin","staff","viewer"], index=1)
+                new_active = _st.selectbox("Active", ["Y","N"], index=0)
+            new_pwd = _st.text_input("กำหนดรหัสผ่าน*", type="password")
+            btn_add = _st.form_submit_button("บันทึกผู้ใช้ใหม่", use_container_width=True, type="primary")
+
+        if btn_add:
+            if not new_user.strip() or not new_pwd.strip():
+                _st.warning("กรุณากรอก Username และรหัสผ่าน"); _st.stop()
+            if (users["Username"] == new_user).any():
+                _st.error("มี Username นี้อยู่แล้ว"); _st.stop()
+            ph = bcrypt.hashpw(new_pwd.encode("utf-8"), bcrypt.gensalt(12)).decode("utf-8")
+            new_row = _pd.DataFrame([{
+                "Username": new_user.strip(),
+                "DisplayName": new_disp.strip(),
+                "Role": new_role,
+                "PasswordHash": ph,
+                "Active": new_active,
+            }])
+            users2 = _pd.concat([users, new_row], ignore_index=True)
+            try:
+                write_df(sh, SHEET_USERS, users2)
+                try: _st.cache_data.clear()
+                except Exception: pass
+                _st.success("เพิ่มผู้ใช้สำเร็จ"); _st.rerun()
+            except Exception as e:
+                _st.error(f"เพิ่มผู้ใช้ไม่สำเร็จ: {e}")
+
+    with tab_edit:
+        default_user = _st.session_state.get("edit_user","")
+        if chosen_username:
+            _st.session_state["edit_user"] = chosen_username
+            default_user = chosen_username
+
+        sel = _st.selectbox(
+            "เลือกผู้ใช้เพื่อแก้ไข",
+            [""] + users["Username"].tolist(),
+            index=([""] + users["Username"].tolist()).index(default_user) if default_user in users["Username"].tolist() else 0
+        )
+
+        target_user = sel or ""
+        if not target_user:
+            _st.info("ยังไม่ได้เลือกผู้ใช้สำหรับแก้ไข"); return
+
+        row = users[users["Username"] == target_user]
+        if row.empty:
+            _st.warning("ไม่พบผู้ใช้ที่เลือก"); return
+        data = row.iloc[0].to_dict()
+
+        with _st.form("form_edit_user2", clear_on_submit=False):
+            c1, c2 = _st.columns([2,1])
+            with c1:
+                username = _st.text_input("Username", value=data["Username"], disabled=True)
+                display  = _st.text_input("Display Name", value=data["DisplayName"])
+            with c2:
+                role  = _st.selectbox("Role", ["admin","staff","viewer"],
+                                     index=["admin","staff","viewer"].index(data["Role"]) if data["Role"] in ["admin","staff","viewer"] else 1)
+                active = _st.selectbox("Active", ["Y","N"],
+                                      index=["Y","N"].index(data["Active"]) if data["Active"] in ["Y","N"] else 0)
+            pwd = _st.text_input("ตั้ง/รีเซ็ตรหัสผ่าน (ปล่อยว่าง = ไม่เปลี่ยน)", type="password")
+
+            c3, c4 = _st.columns([1,1])
+            btn_save = c3.form_submit_button("บันทึกการแก้ไข", use_container_width=True, type="primary")
+            btn_del  = c4.form_submit_button("ลบผู้ใช้นี้", use_container_width=True)
+
+        if btn_del:
+            if username.lower() == "admin":
+                _st.error("ห้ามลบผู้ใช้ admin")
+            else:
+                users2 = users[users["Username"] != username]
+                try:
+                    write_df(sh, SHEET_USERS, users2)
+                    try: _st.cache_data.clear()
+                    except Exception: pass
+                    _st.success(f"ลบผู้ใช้ {username} แล้ว")
+                    _st.session_state.pop("edit_user", None)
+                    _st.rerun()
+                except Exception as e:
+                    _st.error(f"ลบไม่สำเร็จ: {e}")
+
+        if btn_save:
+            idx = users.index[users["Username"] == username][0]
+            users.at[idx, "DisplayName"] = display
+            users.at[idx, "Role"]        = role
+            users.at[idx, "Active"]      = active
+            if pwd.strip():
+                ph = bcrypt.hashpw(pwd.encode("utf-8"), bcrypt.gensalt(12)).decode("utf-8")
+                users.at[idx, "PasswordHash"] = ph
+
+            try:
+                write_df(sh, SHEET_USERS, users)
+                try: _st.cache_data.clear()
+                except Exception: pass
+                _st.success("บันทึกการแก้ไขเรียบร้อย")
+                _st.rerun()
+            except Exception as e:
+                _st.error(f"บันทึกไม่สำเร็จ: {e}")
+# ======================= END OVERRIDES =======================
