@@ -614,32 +614,189 @@ def page_issue_receive(sh):
             st.success("บันทึกรับเข้าแล้ว"); st.experimental_rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
+
 def page_tickets(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True)
-    st.subheader("🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets)")
+    st.subheader("🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets) — เวอร์ชันปรับปรุงสมบูรณ์")
+
+    # โหลดข้อมูล + ทำให้แน่ใจว่ามีคอลัมน์พื้นฐานครบ
     tickets = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
+    for col in ["ประเภท"]:
+        if col not in tickets.columns:
+            tickets[col] = ""
     branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
-    # list
-    st.markdown("### รายการ")
-    st.dataframe(tickets.sort_values("วันที่แจ้ง", ascending=False) if not tickets.empty else tickets, height=300, use_container_width=True)
-    # add
+    t_cats   = read_df(sh, SHEET_TICKET_CATS, TICKET_CAT_HEADERS)
+
+    # ----- ตัวกรอง -----
+    st.markdown("### ตัวกรอง")
+    f1, f2, f3, f4 = st.columns(4)
+    with f1:
+        status_pick = st.selectbox("สถานะ", ["ทั้งหมด","รับแจ้ง","กำลังดำเนินการ","ดำเนินการเสร็จ"], index=0)
+    with f2:
+        br_opts = ["ทั้งหมด"] + ((branches["รหัสสาขา"] + " | " + branches["ชื่อสาขา"]).tolist() if not branches.empty else [])
+        branch_pick = st.selectbox("สาขา", br_opts, index=0)
+    with f3:
+        cat_opts = ["ทั้งหมด"] + ((t_cats["รหัสหมวดปัญหา"] + " | " + t_cats["ชื่อหมวดปัญหา"]).tolist() if not t_cats.empty else [])
+        cat_pick = st.selectbox("หมวดหมู่ปัญหา", cat_opts, index=0)
+    with f4:
+        q = st.text_input("ค้นหา (ผู้แจ้ง/รายละเอียด/หมายเหตุ)")
+
+    d1c, d2c = st.columns(2)
+    with d1c:
+        d1 = st.date_input("วันที่เริ่ม", value=(date.today()-timedelta(days=30)))
+    with d2c:
+        d2 = st.date_input("วันที่สิ้นสุด", value=date.today())
+
+    view = tickets.copy()
+    if not view.empty:
+        view["วันที่แจ้ง"] = pd.to_datetime(view["วันที่แจ้ง"], errors="coerce")
+        view = view.dropna(subset=["วันที่แจ้ง"])
+        view = view[(view["วันที่แจ้ง"].dt.date >= d1) & (view["วันที่แจ้ง"].dt.date <= d2)]
+        if status_pick != "ทั้งหมด":
+            view = view[view["สถานะ"] == status_pick]
+        if branch_pick != "ทั้งหมด":
+            view = view[view["สาขา"] == branch_pick]
+        if cat_pick != "ทั้งหมด":
+            view = view[view["หมวดหมู่"] == cat_pick]
+        if q:
+            mask = (
+                view["ผู้แจ้ง"].astype(str).str.contains(q, case=False, na=False) |
+                view["รายละเอียด"].astype(str).str.contains(q, case=False, na=False) |
+                view["หมายเหตุ"].astype(str).str.contains(q, case=False, na=False)
+            )
+            view = view[mask]
+
+    st.markdown("### ตารางรายการ (กรองแล้ว)")
+    st.dataframe(view.sort_values("วันที่แจ้ง", ascending=False), height=320, use_container_width=True)
+    if not view.empty:
+        st.download_button("ดาวน์โหลด CSV", data=view.to_csv(index=False).encode("utf-8-sig"),
+                           file_name="tickets_filtered.csv", mime="text/csv")
+
     st.markdown("---")
-    with st.form("tk_new", clear_on_submit=True):
-        c1,c2,c3 = st.columns(3)
-        with c1:
-            branch = st.selectbox("สาขา", (branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [])
-            reporter = st.text_input("ผู้แจ้ง")
-        with c2:
-            cate = st.text_input("หมวดหมู่")
-            assignee = st.text_input("ผู้รับผิดชอบ (IT)", value=st.session_state.get("user",""))
-        with c3:
-            detail = st.text_area("รายละเอียด", height=100)
+    tab_add, tab_edit, tab_bulk = st.tabs(["➕ รับแจ้งใหม่","✏️ เปลี่ยนสถานะ/แก้ไข","✅ ปิดงานแบบกลุ่ม"])
+
+    # ===== รับแจ้งใหม่ =====
+    with tab_add:
+        with st.form("tk_new", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            with c1:
+                br_sel = st.selectbox("สาขา", options=(br_opts[1:] if len(br_opts)>1 else ["พิมพ์เอง"]))
+                if br_sel == "พิมพ์เอง":
+                    br_sel = st.text_input("ระบุสาขา (พิมพ์เอง)", value="")
+                reporter = st.text_input("ผู้แจ้ง")
+                t_type = st.selectbox("ประเภท", ["ฮาร์ดแวร์","ซอฟต์แวร์","เครือข่าย","อื่นๆ"], index=0)
+            with c2:
+                cat_sel_opts = ((t_cats["รหัสหมวดปัญหา"] + " | " + t_cats["ชื่อหมวดปัญหา"]).tolist() if not t_cats.empty else []) + ["พิมพ์เอง"]
+                cat_sel = st.selectbox("หมวดหมู่ปัญหา", options=cat_sel_opts if cat_sel_opts else ["พิมพ์เอง"])
+                cat_custom = st.text_input("ระบุหมวด (ถ้าเลือกพิมพ์เอง)", value="" if cat_sel!="พิมพ์เอง" else "", disabled=(cat_sel!="พิมพ์เอง"))
+                cate_val = cat_sel if cat_sel!="พิมพ์เอง" else cat_custom
+                assignee = st.text_input("ผู้รับผิดชอบ (IT)", value=st.session_state.get("user",""))
+            detail = st.text_area("รายละเอียด", height=120)
             note = st.text_input("หมายเหตุ")
-        s = st.form_submit_button("บันทึกการรับแจ้ง", use_container_width=True)
-    if s:
-        tid = "TCK-"+datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
-        row=[tid, now_str(), branch, reporter, cate, detail, "รับแจ้ง", assignee, now_str(), note]
-        append_row(sh, SHEET_TICKETS, row); st.success(f"รับแจ้งแล้ว ({tid})"); st.experimental_rerun()
+            s = st.form_submit_button("บันทึกการรับแจ้ง", use_container_width=True, type="primary")
+        if s:
+            if not br_sel or not reporter or not cate_val or not detail:
+                st.warning("กรุณากรอกข้อมูลให้ครบ")
+            else:
+                tid = "TCK-" + datetime.now(TZ).strftime("%Y%m%d-%H%M%S") if hasattr(datetime, "now") else "TCK-" + str(int(time.time()))
+                row = [tid, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                       br_sel, reporter, cate_val, detail, "รับแจ้ง", assignee,
+                       datetime.now().strftime("%Y-%m-%d %H:%M:%S"), note]
+                df = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
+                for c in ["ประเภท"]:
+                    if c not in df.columns: df[c] = ""
+                df = pd.concat([df, pd.DataFrame([row], columns=TICKETS_HEADERS)], ignore_index=True)
+                if "ประเภท" in df.columns:
+                    df.loc[df["TicketID"]==tid, "ประเภท"] = t_type
+                write_df(sh, SHEET_TICKETS, df[[c for c in df.columns]])
+                st.success(f"รับแจ้งเรียบร้อย (Ticket: {tid})"); st.rerun()
+
+    # ===== แก้ไข =====
+    with tab_edit:
+        if tickets.empty:
+            st.info("ยังไม่มีรายการ")
+        else:
+            labels = (tickets["TicketID"] + " | " + tickets["สาขา"].astype(str)).tolist()
+            pick_label = st.selectbox("เลือก Ticket", options=["-- เลือก --"] + labels)
+            if pick_label != "-- เลือก --":
+                pick_id = pick_label.split(" | ", 1)[0]
+                row = tickets[tickets["TicketID"] == pick_id].iloc[0]
+
+                with st.form("tk_edit", clear_on_submit=False):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        t_branch = st.text_input("สาขา", value=str(row.get("สาขา","")))
+                        t_owner  = st.text_input("ผู้แจ้ง", value=str(row.get("ผู้แจ้ง","")))
+                        t_type   = st.selectbox("ประเภท", ["ฮาร์ดแวร์","ซอฟต์แวร์","เครือข่าย","อื่นๆ"],
+                                                index=0 if str(row.get("ประเภท","")) not in ["ซอฟต์แวร์","เครือข่าย","อื่นๆ"] else ["ฮาร์ดแวร์","ซอฟต์แวร์","เครือข่าย","อื่นๆ"].index(str(row.get("ประเภท",""))))
+                    with c2:
+                        statuses_edit = ["รับแจ้ง","กำลังดำเนินการ","ดำเนินการเสร็จ"]
+                        try:
+                            idx_default = statuses_edit.index(str(row.get("สถานะ","รับแจ้ง")))
+                        except ValueError:
+                            idx_default = 0
+                        t_status = st.selectbox("สถานะ", statuses_edit, index=idx_default)
+                        t_assignee = st.text_input("ผู้รับผิดชอบ", value=str(row.get("ผู้รับผิดชอบ","")))
+                    t_cate = st.text_input("หมวดหมู่", value=str(row.get("หมวดหมู่","")))
+                    t_desc = st.text_area("รายละเอียด", value=str(row.get("รายละเอียด","")), height=120)
+                    t_note = st.text_input("หมายเหตุ", value=str(row.get("หมายเหตุ","")))
+                    colA, colB, colC = st.columns(3)
+                    s_update = colA.form_submit_button("อัปเดต", use_container_width=True, type="primary")
+                    s_close  = colB.form_submit_button("ปิดงาน (เสร็จ)", use_container_width=True)
+                    s_delete = colC.form_submit_button("ลบรายการ", use_container_width=True)
+
+                if s_delete:
+                    df = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
+                    df = df[df["TicketID"] != pick_id].copy()
+                    write_df(sh, SHEET_TICKETS, df)
+                    st.success("ลบเรียบร้อย"); st.rerun()
+
+                if s_update or s_close:
+                    if s_close: t_status = "ดำเนินการเสร็จ"
+                    df = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
+                    for c in ["ประเภท"]:
+                        if c not in df.columns: df[c] = ""
+                    idx = df.index[df["TicketID"] == pick_id]
+                    if len(idx)==1:
+                        i = idx[0]
+                        df.at[i,"สาขา"] = t_branch
+                        df.at[i,"ผู้แจ้ง"] = t_owner
+                        df.at[i,"หมวดหมู่"] = t_cate
+                        df.at[i,"รายละเอียด"] = t_desc
+                        df.at[i,"สถานะ"] = t_status
+                        df.at[i,"ผู้รับผิดชอบ"] = t_assignee
+                        df.at[i,"อัปเดตล่าสุด"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        df.at[i,"หมายเหตุ"] = t_note
+                        df.at[i,"ประเภท"] = t_type
+                        write_df(sh, SHEET_TICKETS, df[[c for c in df.columns]])
+                        st.success("อัปเดตเรียบร้อย"); st.rerun()
+
+    # ===== ปิดงานแบบกลุ่ม =====
+    with tab_bulk:
+        st.caption("เลือก Ticket หลายรายการแล้วปิดงานทีเดียว (เปลี่ยนสถานะเป็น 'ดำเนินการเสร็จ')")
+        if tickets.empty:
+            st.info("ยังไม่มีรายการ")
+        else:
+            # แสดงเฉพาะที่ยังไม่เสร็จ
+            open_df = tickets[tickets["สถานะ"] != "ดำเนินการเสร็จ"].copy()
+            if open_df.empty:
+                st.success("ไม่มีงานค้าง")
+            else:
+                open_df["เลือก"] = False
+                ed = st.data_editor(open_df[["เลือก","TicketID","วันที่แจ้ง","สาขา","ผู้แจ้ง","หมวดหมู่","รายละเอียด","สถานะ","ผู้รับผิดชอบ","หมายเหตุ"]],
+                                    use_container_width=True, height=260, num_rows="fixed",
+                                    column_config={"เลือก": st.column_config.CheckboxColumn()})
+                if st.button("ปิดงานที่เลือก"):
+                    picked = ed[ed["เลือก"] == True]["TicketID"].tolist()
+                    if not picked:
+                        st.warning("ยังไม่ได้เลือกรายการ")
+                    else:
+                        df = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
+                        df.loc[df["TicketID"].isin(picked), "สถานะ"] = "ดำเนินการเสร็จ"
+                        df.loc[df["TicketID"].isin(picked), "อัปเดตล่าสุด"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        write_df(sh, SHEET_TICKETS, df)
+                        st.success(f"ปิดงาน {len(picked)} รายการเรียบร้อย"); st.rerun()
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 def page_reports(sh):
