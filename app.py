@@ -27,6 +27,31 @@ import altair as alt
 import json
 import base64
 
+
+# ===== PATCH: cache helpers with hashable keys =====
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_open_sheet_by_key(sheet_key: str):
+    gc = get_client()
+    return gc.open_by_key(sheet_key)
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_open_sheet_by_url(sheet_url: str):
+    gc = get_client()
+    return gc.open_by_url(sheet_url)
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_ws_records_by_key(sheet_key: str, ws_title: str):
+    sh = _cached_open_sheet_by_key(sheet_key)
+    ws = sh.worksheet(ws_title)
+    return ws.get_all_records()
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_ws_records_by_url(sheet_url: str, ws_title: str):
+    sh = _cached_open_sheet_by_url(sheet_url)
+    ws = sh.worksheet(ws_title)
+    return ws.get_all_records()
+# ===== END PATCH =====
+
 # ---- Embedded service account (base64 of JSON). Leave blank if unused ----
 EMBEDDED_GOOGLE_CREDENTIALS_B64 = ""
 
@@ -61,18 +86,9 @@ except NameError:
         return get_client()
 
     def open_sheet_by_url(sheet_url: str):
-        """
-        Open Google Sheet by URL using gspread client.
-        """
-        gc = _gc()
-        return gc.open_by_url(str(sheet_url).strip())
-
-    def open_sheet_by_key(sheet_key: str):
-        """
-        Open Google Sheet by key using gspread client.
-        """
-        gc = _gc()
-        return gc.open_by_key(str(sheet_key).strip())
+    return _cached_open_sheet_by_url(str(sheet_url).strip())
+def open_sheet_by_key(sheet_key: str):
+    return _cached_open_sheet_by_key(str(sheet_key).strip())
 # ===== END FIX =====
 
 
@@ -327,29 +343,47 @@ def _get_all_values_with_retry(ws, max_attempts: int = 5):
             sleep_s = min(2 ** attempt, 16)
             time.sleep(sleep_s)
 
-@st.cache_data(ttl=60)
-def read_df(sh, title, headers, _ttl_seconds: int = 15):
-    # Read a worksheet into DataFrame with retry + short-term caching.
+
+def read_df(sh, sheet_name: str, headers=None):
+    """
+    Read a worksheet into DataFrame with caching using hashable keys.
+    Keeps the same signature so call sites are unaffected.
+    """
+    import pandas as pd
+    # Try to get spreadsheet key/id
+    sheet_key = getattr(sh, "id", None) or getattr(sh, "spreadsheet_id", None) or ""
+    sheet_url = ""
+    # fallback to session url if available
     try:
-        sh_id = getattr(sh, 'id', None) or getattr(sh, 'spreadsheet_id', None) or 'unknown'
+        sheet_url = st.session_state.get("sheet_url", "") or ""
     except Exception:
-        sh_id = 'unknown'
-    key = (str(sh_id), str(title), tuple(headers))
-    now = time.time()
-    entry = _READ_CACHE.get(key)
-    if entry and (now - entry['ts'] < _ttl_seconds):
-        return entry['df'].copy()
+        sheet_url = ""
 
-    ws = sh.worksheet(title)
-    vals = _get_all_values_with_retry(ws)
-    if not vals:
-        df = pd.DataFrame(columns=headers)
-    else:
-        df = pd.DataFrame(vals[1:], columns=vals[0])
-        if df.empty:
-            df = pd.DataFrame(columns=headers)
+    try:
+        if sheet_key:
+            records = _cached_ws_records_by_key(str(sheet_key), str(sheet_name))
+        elif sheet_url:
+            records = _cached_ws_records_by_url(str(sheet_url), str(sheet_name))
+        else:
+            # last resort: read directly without cache
+            ws = sh.worksheet(sheet_name)
+            records = ws.get_all_records()
+    except Exception as e:
+        # propagate or return empty df consistent with existing code style
+        raise
 
-    _READ_CACHE[key] = {'df': df.copy(), 'ts': now}
+    df = pd.DataFrame(records)
+    if headers:
+        # ensure required columns exist
+        for h in headers:
+            if h not in df.columns:
+                df[h] = ""
+
+        # reorder to requested headers if possible
+        try:
+            df = df[headers]
+        except Exception:
+            pass
     return df
 
 def write_df(sh, title, df):
