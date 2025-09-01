@@ -27,6 +27,24 @@ import altair as alt
 import json
 import base64
 
+
+# ===== PATCH: Cache wrappers for worksheet operations =====
+@st.cache_data(ttl=60)
+def ws_get_all_records(ws):
+    """
+    Cached wrapper for worksheet.get_all_records()
+    """
+    return ws.get_all_records()
+
+@st.cache_data(ttl=60)
+def ws_get(ws, *args, **kwargs):
+    """
+    Cached wrapper for worksheet.get()
+    """
+    return ws.get(*args, **kwargs)
+# ===== END PATCH =====
+
+
 # ===== FIX: add open_sheet_by_url/open_sheet_by_key if missing =====
 try:
     open_sheet_by_url
