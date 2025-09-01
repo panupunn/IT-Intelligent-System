@@ -289,6 +289,7 @@ def _get_all_values_with_retry(ws, max_attempts: int = 5):
             sleep_s = min(2 ** attempt, 16)
             time.sleep(sleep_s)
 
+@st.cache_data(ttl=60)
 def read_df(sh, title, headers, _ttl_seconds: int = 15):
     # Read a worksheet into DataFrame with retry + short-term caching.
     try:
