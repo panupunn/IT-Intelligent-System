@@ -1385,7 +1385,7 @@ def page_reports(sh):
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-def page_users_admin(sh):
+def page_users(sh):
     st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("👥 ผู้ใช้ & สิทธิ์ (Admin)")
     if st.session_state.get("role") != "admin": st.info("เฉพาะผู้ดูแลระบบ (admin)"); st.markdown("</div>", unsafe_allow_html=True); return
     users = read_df(sh, SHEET_USERS, USERS_HEADERS); st.dataframe(users, height=260, use_container_width=True)
@@ -1915,7 +1915,7 @@ def main():
     elif page.startswith("🛠️"): page_tickets(sh)
     elif page.startswith("🧾"): page_issue_receive(sh)
     elif page.startswith("📑"): page_reports(sh)
-    elif page.startswith("👤") or page.startswith("👥"): page_users_admin(sh)
+    elif page.startswith("👤") or page.startswith("👥"): page_users(sh)
     elif page.startswith("นำเข้า") or page.startswith("🗂️"): page_import(sh)
     st.caption("© 2025 IT Stock · Streamlit + Google Sheets By AOD. · **iTao iT (V.1.0)** · iTao iT (V.1.0)")
 
