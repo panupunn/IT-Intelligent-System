@@ -1385,29 +1385,6 @@ def page_reports(sh):
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-def page_users(sh):
-    st.markdown("<div class='block-card'>", unsafe_allow_html=True); st.subheader("👥 ผู้ใช้ & สิทธิ์ (Admin)")
-    if st.session_state.get("role") != "admin": st.info("เฉพาะผู้ดูแลระบบ (admin)"); st.markdown("</div>", unsafe_allow_html=True); return
-    users = read_df(sh, SHEET_USERS, USERS_HEADERS); st.dataframe(users, height=260, use_container_width=True)
-    st.markdown("### เพิ่ม/แก้ไข ผู้ใช้")
-    with st.form("user_form", clear_on_submit=True):
-        c1,c2,c3 = st.columns(3)
-        with c1: uname = st.text_input("Username"); dname = st.text_input("Display Name")
-        with c2: role = st.selectbox("Role", ["admin","staff","viewer"], index=1); active = st.selectbox("Active", ["Y","N"], index=0)
-        with c3: pwd = st.text_input("ตั้ง/รีเซ็ตรหัสผ่าน", type="password")
-        s = st.form_submit_button("บันทึกผู้ใช้", use_container_width=True)
-    if s:
-        if uname.strip()=="": st.error("กรุณาใส่ Username")
-        else:
-            if pwd.strip(): hash_str = bcrypt.hashpw(pwd.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-            else:
-                mask = users["Username"]==uname
-                hash_str = users.loc[mask,"PasswordHash"].iloc[0] if mask.any() else bcrypt.hashpw("password123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-            if (users["Username"]==uname).any():
-                users.loc[users["Username"]==uname, USERS_HEADERS] = [uname, dname, role, hash_str, active]
-            else:
-                users = pd.concat([users, pd.DataFrame([[uname, dname, role, hash_str, active]], columns=USERS_HEADERS)], ignore_index=True)
-            write_df(sh, SHEET_USERS, users); st.success("บันทึกแล้ว"); safe_rerun()
 
 def is_test_text(s: str) -> bool:
     s = str(s).lower()
@@ -1917,10 +1894,7 @@ def main():
     elif page.startswith("📑"): page_reports(sh)
     elif page.startswith("👤") or page.startswith("👥"): page_users(sh)
     elif page.startswith("นำเข้า") or page.startswith("🗂️"): page_import(sh)
-    st.caption("© 2025 IT Stock · Streamlit + Google Sheets By AOD. · **iTao iT (V.1.0)** · iTao iT (V.1.0)")
-
-if __name__ == "__main__":
-    main()
+    st.caption("© 2025 IT Stock · Streamlit + Google Sheets By AOD. · **iTao iT (V.1.0)**")
 
 def page_users(sh):
     """จัดการผู้ใช้ (แยกแท็บ เพิ่ม/แก้ไข) + เลือกจากตารางเพื่อแก้ไขได้"""
@@ -2068,3 +2042,8 @@ def page_users(sh):
                 st.rerun()
             except Exception as e:
                 st.error(f"บันทึกไม่สำเร็จ: {e}")
+
+
+if __name__ == "__main__":
+    main()
+
