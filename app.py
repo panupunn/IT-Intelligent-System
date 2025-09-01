@@ -1943,10 +1943,26 @@ def page_users(sh):
             users[col] = ""
     users = users[base_cols].fillna("")
 
-    # ตารางหลัก (อัปเดตสด)
     st.markdown("##### รายชื่อผู้ใช้")
-    st.dataframe(users[["Username","DisplayName","Role","PasswordHash","Active"]],
-                 use_container_width=True, height=260)
+    # เพิ่มคอลัมน์ 'เลือก' เพื่อกดเลือกจากในตารางได้
+    users_display = users.copy()
+    users_display["เลือก"] = False
+
+    edited_table = st.data_editor(
+        users_display[["เลือก","Username","DisplayName","Role","PasswordHash","Active"]],
+        use_container_width=True,
+        height=280,
+        num_rows="fixed",
+        key="users_editor",
+        column_config={
+            "เลือก": st.column_config.CheckboxColumn(help="ติ๊กเพื่อเลือกผู้ใช้สำหรับแก้ไข")
+        }
+    )
+
+    # ตรวจว่ามีการติ๊กเลือกแถวหรือไม่
+    chosen = edited_table[edited_table["เลือก"] == True]
+    if not chosen.empty:
+        st.session_state["edit_user"] = str(chosen.iloc[0]["Username"])
 
     tab_add, tab_edit = st.tabs(["➕ เพิ่มผู้ใช้", "✏️ แก้ไขผู้ใช้"])
 
@@ -1987,25 +2003,11 @@ def page_users(sh):
 
     # ---------------- TAB: แก้ไขผู้ใช้ ----------------
     with tab_edit:
-        st.markdown("เลือกผู้ใช้จากตารางหรือจากรายการด้านล่างเพื่อแก้ไข")
-
-        # ปุ่มเลือกจากตาราง (หนึ่งปุ่มต่อแถว)
-        pick_cols = st.columns(4)
-        with pick_cols[0]:
-            st.caption("คลิกปุ่ม 'เลือก' ด้านล่างเพื่อโหลดผู้ใช้")
-        # วางปุ่มเป็นคอลัมน์ยาวใต้ตาราง
-        selected_from_table = None
-        for i, r in users.iterrows():
-            if st.button(f"เลือก: {r['Username']}", key=f"pick_{i}"):
-                selected_from_table = r["Username"]
-                st.session_state["edit_user"] = selected_from_table
-
-        # ถ้าไม่มีการเลือกจากปุ่ม ให้ใช้ selectbox
         default_user = st.session_state.get("edit_user","")
-        sel = st.selectbox("หรือเลือกจากรายการ", [""] + users["Username"].tolist(),
+        sel = st.selectbox("เลือกผู้ใช้เพื่อแก้ไข", [""] + users["Username"].tolist(),
                            index=([""] + users["Username"].tolist()).index(default_user) if default_user in users["Username"].tolist() else 0)
 
-        target_user = selected_from_table or (sel if sel else "")
+        target_user = sel or ""
         if not target_user:
             st.info("ยังไม่ได้เลือกผู้ใช้สำหรับแก้ไข"); return
 
@@ -2030,7 +2032,6 @@ def page_users(sh):
             btn_save = c3.form_submit_button("บันทึกการแก้ไข", use_container_width=True, type="primary")
             btn_del  = c4.form_submit_button("ลบผู้ใช้นี้", use_container_width=True)
 
-        # ลบ
         if btn_del:
             if username.lower() == "admin":
                 st.error("ห้ามลบผู้ใช้ admin")
@@ -2046,9 +2047,7 @@ def page_users(sh):
                 except Exception as e:
                     st.error(f"ลบไม่สำเร็จ: {e}")
 
-        # บันทึกแก้ไข
         if btn_save:
-            # แก้ไขใน DataFrame
             idx = users.index[users["Username"] == username][0]
             users.at[idx, "DisplayName"] = display
             users.at[idx, "Role"]        = role
