@@ -1867,7 +1867,81 @@ BKK1,สาขาบางนา
             write_df(sh, SHEET_TICKET_CATS, cur); st.success(f"เพิ่ม {add} / อัปเดต {upd}")
             if errs: st.warning(pd.DataFrame(errs))
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    
+    # ===== ผู้ใช้ =====
+    with tab_user:
+        import pandas as pd, bcrypt
+        st.markdown("##### อัปโหลดไฟล์")
+        up = st.file_uploader("อัปโหลดไฟล์ ผู้ใช้ (CSV/Excel)", type=["csv","xlsx"], key="up_users")
+        if up:
+            df, err = _read_upload_df(up)
+            if err:
+                st.error(err)
+            else:
+                st.dataframe(df.head(20), height=200, use_container_width=True)
+                if "Username" not in df.columns:
+                    st.error("หัวตารางอย่างน้อยต้องมีคอลัมน์ Username")
+                else:
+                    if st.button("นำเข้า/อัปเดต ผู้ใช้", use_container_width=True, key="btn_imp_users"):
+                        cur = read_df(sh, SHEET_USERS, USERS_HEADERS)
+                        for c in ["Username","DisplayName","Role","PasswordHash","Active"]:
+                            if c not in cur.columns: cur[c] = ""
+                        cur = cur[["Username","DisplayName","Role","PasswordHash","Active"]].fillna("")
+                        add=upd=0; errs=[]
+                        for i, r in df.iterrows():
+                            username = str(r.get("Username","")).strip()
+                            if username=="":
+                                errs.append({"row":i+1,"error":"เว้นว่าง Username"}); 
+                                continue
+                            display = str(r.get("DisplayName","")).strip()
+                            role    = str(r.get("Role","staff")).strip() or "staff"
+                            active  = str(r.get("Active","Y")).strip() or "Y"
+                            pwd_hash = None
+                            plain = str(r.get("Password","")).strip() if "Password" in df.columns else ""
+                            if plain:
+                                try:
+                                    pwd_hash = bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt(12)).decode("utf-8")
+                                except Exception as e:
+                                    errs.append({"row":i+1,"error":f"แฮชรหัสผ่านไม่สำเร็จ: {e}","Username":username}); 
+                                    continue
+                            else:
+                                if "PasswordHash" in df.columns:
+                                    ph = str(r.get("PasswordHash","")).strip()
+                                    if ph: pwd_hash = ph
+                            if (cur["Username"]==username).any():
+                                idx = cur.index[cur["Username"]==username][0]
+                                cur.at[idx,"DisplayName"]=display
+                                cur.at[idx,"Role"]=role
+                                cur.at[idx,"Active"]=active
+                                if pwd_hash: cur.at[idx,"PasswordHash"]=pwd_hash
+                                upd+=1
+                            else:
+                                if not pwd_hash:
+                                    errs.append({"row":i+1,"error":"ผู้ใช้ใหม่ต้องระบุ Password หรือ PasswordHash","Username":username}); 
+                                    continue
+                                new_row = pd.DataFrame([{
+                                    "Username": username,
+                                    "DisplayName": display,
+                                    "Role": role,
+                                    "PasswordHash": pwd_hash,
+                                    "Active": active,
+                                }])
+                                cur = pd.concat([cur, new_row], ignore_index=True); add+=1
+                        write_df(sh, SHEET_USERS, cur)
+                        try:
+                            st.cache_data.clear()
+                        except Exception:
+                            pass
+                        st.success(f"เพิ่ม {add} ราย / อัปเดต {upd} ราย")
+                        if errs:
+                            st.warning(pd.DataFrame(errs))
+
+        st.markdown("##### เทมเพลตไฟล์")
+        tpl = "Username,DisplayName,Role,Active,Password\nuser001,คุณเอ,staff,Y,1234\n"
+        st.download_button("เทมเพลต ผู้ใช้ (CSV)", data=tpl.encode("utf-8-sig"),
+                           file_name="template_users.csv", mime="text/csv", use_container_width=True)
+
+st.markdown("</div>", unsafe_allow_html=True)
 def main():
     st.set_page_config(page_title=APP_TITLE, page_icon="🧰", layout="wide"); st.markdown(MINIMAL_CSS, unsafe_allow_html=True)
     st.title(APP_TITLE); st.caption(APP_TAGLINE)
