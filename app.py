@@ -27,6 +27,33 @@ import altair as alt
 import json
 import base64
 
+# ===== FIX: add open_sheet_by_url/open_sheet_by_key if missing =====
+try:
+    open_sheet_by_url
+except NameError:
+    import streamlit as st
+
+    @st.cache_resource(show_spinner=False)
+    def _gc():
+        # reuse the global get_client()
+        return get_client()
+
+    def open_sheet_by_url(sheet_url: str):
+        """
+        Open Google Sheet by URL using gspread client.
+        """
+        gc = _gc()
+        return gc.open_by_url(str(sheet_url).strip())
+
+    def open_sheet_by_key(sheet_key: str):
+        """
+        Open Google Sheet by key using gspread client.
+        """
+        gc = _gc()
+        return gc.open_by_key(str(sheet_key).strip())
+# ===== END FIX =====
+
+
 # ---- Compatibility helper for Streamlit rerun ----
 
 # -------------------- User helper --------------------
