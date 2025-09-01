@@ -170,8 +170,25 @@ try:
 except NameError:
     CREDENTIALS_FILE = "service_account.json"
 
+
 def _load_sa_from_secrets_or_env():
+    """
+    Try to load Service Account with this order:
+      0) Embedded base64 constant in code
+      1) st.secrets["gcp_service_account"] (dict)
+      2) st.secrets["service_account_json"] (string JSON)
+      3) ENV GOOGLE_CREDENTIALS_JSON (string JSON or base64)
+    """
     import os, json, base64, streamlit as st
+
+    # 0) embedded constant
+    try:
+        from base64 import b64decode
+        if 'EMBEDDED_GOOGLE_CREDENTIALS_B64' in globals() and EMBEDDED_GOOGLE_CREDENTIALS_B64.strip():
+            return json.loads(b64decode(EMBEDDED_GOOGLE_CREDENTIALS_B64).decode("utf-8"))
+    except Exception:
+        pass
+
     try:
         if "gcp_service_account" in st.secrets and isinstance(st.secrets["gcp_service_account"], dict):
             return dict(st.secrets["gcp_service_account"])
@@ -179,6 +196,7 @@ def _load_sa_from_secrets_or_env():
             return json.loads(str(st.secrets["service_account_json"]))
     except Exception:
         pass
+
     raw = os.environ.get("GOOGLE_CREDENTIALS_JSON", "").strip()
     if raw:
         try:
@@ -187,14 +205,7 @@ def _load_sa_from_secrets_or_env():
             return json.loads(base64.b64decode(raw).decode("utf-8"))
         except Exception:
             pass
-    # 0) embedded base64 in code
-try:
-    from base64 import b64decode
-    if EMBEDDED_GOOGLE_CREDENTIALS_B64.strip():
-        return json.loads(b64decode(EMBEDDED_GOOGLE_CREDENTIALS_B64).decode("utf-8"))
-except Exception:
-    pass
-return None
+    return None
 
 
 def _ensure_credentials_available():
