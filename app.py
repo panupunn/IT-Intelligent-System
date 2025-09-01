@@ -1917,16 +1917,16 @@ def main():
     elif page.startswith("📑"): page_reports(sh)
     elif page.startswith("👤") or page.startswith("👥"): page_users_admin(sh)
     elif page.startswith("นำเข้า") or page.startswith("🗂️"): page_import(sh)
-    st.caption("© 2025 IT Stock · Streamlit + Google Sheets By AOD. · iTao iT (V.1.0)")
+    st.caption("© 2025 IT Stock · Streamlit + Google Sheets By AOD. · **iTao iT (V.1.0)** · iTao iT (V.1.0)")
 
 if __name__ == "__main__":
     main()
 
 def page_users(sh):
     """จัดการผู้ใช้ (แยกแท็บ เพิ่ม/แก้ไข) + เลือกจากตารางเพื่อแก้ไขได้"""
+    import streamlit as st
     import pandas as pd
     import bcrypt
-    import streamlit as st
 
     st.subheader("👥 ผู้ใช้ & สิทธิ์ (Admin)")
 
@@ -1945,23 +1945,21 @@ def page_users(sh):
     users = users[base_cols].fillna("")
 
     # ===== ตารางหลัก =====
-    st.markdown("#### 📋 รายชื่อผู้ใช้ (คลิกติ๊ก 'เลือก' เพื่อแก้ไข)")
-    users_display = users.copy()
-    users_display["เลือก"] = False
-    edited_table = st.data_editor(
-        users_display[["เลือก","Username","DisplayName","Role","PasswordHash","Active"]],
-        use_container_width=True,
-        height=300,
-        num_rows="fixed",
-        key="users_editor",
-        column_config={
-            "เลือก": st.column_config.CheckboxColumn(help="ติ๊กเพื่อเลือกผู้ใช้สำหรับแก้ไข")
-        }
-    )
-
-    chosen = edited_table[edited_table["เลือก"] == True]
-    if not chosen.empty:
-        st.session_state["edit_user"] = str(chosen.iloc[0]["Username"])
+    st.markdown("#### 📋 รายชื่อผู้ใช้ (ติ๊ก 'เลือก' เพื่อแก้ไข)")
+    chosen_username = None
+    if hasattr(st, "data_editor"):
+        users_display = users.copy()
+        users_display["เลือก"] = False
+        edited_table = st.data_editor(
+            users_display[["เลือก","Username","DisplayName","Role","PasswordHash","Active"]],
+            use_container_width=True, height=300, num_rows="fixed",
+            column_config={"เลือก": st.column_config.CheckboxColumn(help="ติ๊กเพื่อเลือกผู้ใช้สำหรับแก้ไข")}
+        )
+        picked = edited_table[edited_table["เลือก"] == True]
+        if not picked.empty:
+            chosen_username = str(picked.iloc[0]["Username"])
+    else:
+        st.dataframe(users, use_container_width=True, height=300)
 
     tab_add, tab_edit = st.tabs(["➕ เพิ่มผู้ใช้", "✏️ แก้ไขผู้ใช้"])
 
@@ -2003,8 +2001,12 @@ def page_users(sh):
     # ---------------- TAB: แก้ไขผู้ใช้ ----------------
     with tab_edit:
         default_user = st.session_state.get("edit_user","")
+        if chosen_username:
+            st.session_state["edit_user"] = chosen_username
+            default_user = chosen_username
+
         sel = st.selectbox(
-            "เลือกผู้ใช้เพื่อแก้ไข (ถ้าติ๊กในตารางแล้ว จะเลือกให้อัตโนมัติ)",
+            "เลือกผู้ใช้เพื่อแก้ไข",
             [""] + users["Username"].tolist(),
             index=([""] + users["Username"].tolist()).index(default_user) if default_user in users["Username"].tolist() else 0
         )
