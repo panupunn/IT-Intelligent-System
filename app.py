@@ -113,13 +113,63 @@ def ensure_credentials_ui():
         st.success("บันทึกไฟล์แล้ว รีเฟรช..."); st.rerun()
     st.stop()
 
+# ========================= PATCH: Persisted Service Account (no re-upload) =========================
+try:
+    CREDENTIALS_FILE
+except NameError:
+    CREDENTIALS_FILE = "service_account.json"
+
+def _load_sa_from_secrets_or_env():
+    import os, json, base64, streamlit as st
+    try:
+        if "gcp_service_account" in st.secrets and isinstance(st.secrets["gcp_service_account"], dict):
+            return dict(st.secrets["gcp_service_account"])
+        if "service_account_json" in st.secrets:
+            return json.loads(str(st.secrets["service_account_json"]))
+    except Exception:
+        pass
+    raw = os.environ.get("GOOGLE_CREDENTIALS_JSON", "").strip()
+    if raw:
+        try:
+            if raw.startswith("{"):
+                return json.loads(raw)
+            return json.loads(base64.b64decode(raw).decode("utf-8"))
+        except Exception:
+            pass
+    return None
+
+def _ensure_credentials_available():
+    import os, streamlit as st
+    sa = _load_sa_from_secrets_or_env()
+    if sa:
+        return ("secrets", sa)
+    if os.path.exists(CREDENTIALS_FILE):
+        return ("file", None)
+    st.warning("ยังไม่พบ Service Account (แนะนำให้ใส่ใน st.secrets เพื่อไม่ต้องอัปโหลดซ้ำ)")
+    up = st.file_uploader("อัปโหลดไฟล์ service_account.json", type=["json"])
+    if up is not None:
+        with open(CREDENTIALS_FILE, "wb") as f:
+            f.write(up.read())
+        st.success("บันทึกไฟล์แล้ว กำลังรีเฟรช…")
+        st.rerun()
+    st.stop()
+# ========================= END PATCH helpers =========================
+
 @st.cache_resource(show_spinner=False)
 def get_client():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
-    return gspread.authorize(creds)
+    """
+    Build a gspread client from (secrets/env/file). No interactive prompt after app wakes.
+    """
+    mode, sa_info = _ensure_credentials_available()
+    scopes = ["https://www.googleapis.com/auth/spreadsheets",
+              "https://www.googleapis.com/auth/drive"]
 
-def open_sheet_by_url(sheet_url: str):
+    if mode == "secrets":
+        creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
+    else:
+        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+
+    return gspread.authorize(creds)def open_sheet_by_url(sheet_url: str):
     gc = get_client()
     return gc.open_by_url(sheet_url)
 
