@@ -76,6 +76,86 @@ try:
 except NameError:
     import streamlit as st
 
+# ===== Fixed: Stable Google Service Account loader (no more manual upload after reboot) =====
+import os, json, base64
+import gspread
+from google.oauth2.service_account import Credentials
+
+GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+# Optional: embed Base64 credential via ENV or constant
+EMBEDDED_SA_B64 = os.environ.get("EMBEDDED_SA_B64", "").strip()
+
+def _try_load_sa_from_secrets():
+    try:
+        if "gcp_service_account" in st.secrets:
+            return dict(st.secrets["gcp_service_account"])
+        if "service_account" in st.secrets:
+            return dict(st.secrets["service_account"])
+    except Exception:
+        pass
+    return None
+
+def _try_load_sa_from_env():
+    raw = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON") or os.environ.get("SERVICE_ACCOUNT_JSON")
+    if not raw:
+        return None
+    try:
+        raw = raw.strip()
+        if raw.lstrip().startswith("{"):
+            return json.loads(raw)
+        return json.loads(base64.b64decode(raw).decode("utf-8"))
+    except Exception:
+        return None
+
+def _try_load_sa_from_file():
+    for p in ("./service_account.json", "/mount/data/service_account.json", "/mnt/data/service_account.json"):
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            continue
+    return None
+
+def _try_load_sa_from_embedded():
+    if not EMBEDDED_SA_B64:
+        return None
+    try:
+        return json.loads(base64.b64decode(EMBEDDED_SA_B64).decode("utf-8"))
+    except Exception:
+        return None
+
+@st.cache_resource(show_spinner=False)
+def _get_gspread_client():
+    info = (
+        _try_load_sa_from_secrets()
+        or _try_load_sa_from_env()
+        or _try_load_sa_from_file()
+        or _try_load_sa_from_embedded()
+    )
+    if info is None:
+        # very last fallback – only shows once when none of the above are configured
+        file = st.file_uploader("อัปโหลดไฟล์ service_account.json", type=["json"], key="sa_json_once")
+        if not file:
+            st.stop()
+        info = json.loads(file.getvalue().decode("utf-8"))
+    creds = Credentials.from_service_account_info(info, scopes=GOOGLE_SCOPES)
+    return gspread.authorize(creds)
+
+@st.cache_resource(show_spinner=False)
+def open_sheet_by_url(sheet_url: str):
+    gc = _get_gspread_client()
+    return gc.open_by_url(sheet_url)
+
+@st.cache_resource(show_spinner=False)
+def open_sheet_by_key(key: str):
+    gc = _get_gspread_client()
+    return gc.open_by_key(key)
+# ===== End Fixed =====
+
     @st.cache_resource(show_spinner=False)
     def _gc():
         # reuse the global get_client()
