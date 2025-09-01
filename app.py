@@ -27,6 +27,10 @@ import altair as alt
 import json
 import base64
 
+# ---- Embedded service account (base64 of JSON). Leave blank if unused ----
+EMBEDDED_GOOGLE_CREDENTIALS_B64 = ""
+
+
 
 # ===== PATCH: Cache wrappers for worksheet operations =====
 @st.cache_data(ttl=60)
@@ -183,22 +187,27 @@ def _load_sa_from_secrets_or_env():
             return json.loads(base64.b64decode(raw).decode("utf-8"))
         except Exception:
             pass
-    return None
+    # 0) embedded base64 in code
+try:
+    from base64 import b64decode
+    if EMBEDDED_GOOGLE_CREDENTIALS_B64.strip():
+        return json.loads(b64decode(EMBEDDED_GOOGLE_CREDENTIALS_B64).decode("utf-8"))
+except Exception:
+    pass
+return None
+
 
 def _ensure_credentials_available():
+    """
+    Use secrets/env/embedded first; if absent, show a clear error (no uploader).
+    """
     import os, streamlit as st
     sa = _load_sa_from_secrets_or_env()
     if sa:
         return ("secrets", sa)
     if os.path.exists(CREDENTIALS_FILE):
         return ("file", None)
-    st.warning("ยังไม่พบ Service Account (แนะนำให้ใส่ใน st.secrets เพื่อไม่ต้องอัปโหลดซ้ำ)")
-    up = st.file_uploader("อัปโหลดไฟล์ service_account.json", type=["json"])
-    if up is not None:
-        with open(CREDENTIALS_FILE, "wb") as f:
-            f.write(up.read())
-        st.success("บันทึกไฟล์แล้ว กำลังรีเฟรช…")
-        st.rerun()
+    st.error("ไม่พบ Service Account — โปรดใส่ค่าใน st.secrets หรือเติมค่าตัวแปร EMBEDDED_GOOGLE_CREDENTIALS_B64 ในโค้ด (เป็น base64 ของไฟล์ JSON)")
     st.stop()
 # ========================= END PATCH helpers =========================
 
