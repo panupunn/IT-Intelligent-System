@@ -1,3 +1,20 @@
+
+# ----- Compatibility wrappers (avoid NameError in legacy pages) -----
+try:
+    open_sheet_by_url
+except NameError:
+    @st.cache_resource(show_spinner=False)
+    def open_sheet_by_url(sheet_url: str):
+        return _get_gspread_client().open_by_url(sheet_url)
+
+try:
+    open_sheet_by_key
+except NameError:
+    @st.cache_resource(show_spinner=False)
+    def open_sheet_by_key(key: str):
+        return _get_gspread_client().open_by_key(key)
+# ----- End wrappers -----
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
