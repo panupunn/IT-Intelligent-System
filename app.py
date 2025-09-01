@@ -29,25 +29,21 @@ import base64
 
 
 # ===== PATCH: cache helpers with hashable keys =====
-@st.cache_data(ttl=60, show_spinner=False)
-def _cached_open_sheet_by_key(sheet_key: str):
+def _open_sheet_by_key_nocache(sheet_key: str):
     gc = get_client()
     return gc.open_by_key(sheet_key)
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _cached_open_sheet_by_url(sheet_url: str):
+def _open_sheet_by_url_nocache(sheet_url: str):
     gc = get_client()
     return gc.open_by_url(sheet_url)
-
 @st.cache_data(ttl=60, show_spinner=False)
 def _cached_ws_records_by_key(sheet_key: str, ws_title: str):
-    sh = _cached_open_sheet_by_key(sheet_key)
+    sh = _open_sheet_by_key_nocache(sheet_key)
     ws = sh.worksheet(ws_title)
     return ws.get_all_records()
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _cached_ws_records_by_url(sheet_url: str, ws_title: str):
-    sh = _cached_open_sheet_by_url(sheet_url)
+    sh = _open_sheet_by_url_nocache(sheet_url)
     ws = sh.worksheet(ws_title)
     return ws.get_all_records()
 # ===== END PATCH =====
@@ -88,12 +84,12 @@ except NameError:
     
 def open_sheet_by_url(sheet_url: str):
     """Open spreadsheet by URL with caching."""
-    return _cached_open_sheet_by_url(str(sheet_url).strip())
+    return _open_sheet_by_url_nocache(str(sheet_url).strip())
 
 
 def open_sheet_by_key(sheet_key: str):
     """Open spreadsheet by key with caching."""
-    return _cached_open_sheet_by_key(str(sheet_key).strip())
+    return _open_sheet_by_key_nocache(str(sheet_key).strip())
 
 # ===== END FIX =====
 
