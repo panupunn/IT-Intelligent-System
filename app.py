@@ -76,9 +76,8 @@ try:
 except NameError:
     import streamlit as st
 
-# ===== Fixed: Stable Google Service Account loader (no more manual upload after reboot) =====
-import os, json, base64
-import gspread
+# ===== Stable Google Service Account loader (secrets → env → file → embedded) =====
+import os, json, base64, gspread
 from google.oauth2.service_account import Credentials
 
 GOOGLE_SCOPES = [
@@ -86,7 +85,7 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Optional: embed Base64 credential via ENV or constant
+# Optional embedded fallback; respect ENV override
 EMBEDDED_SA_B64 = os.environ.get("EMBEDDED_SA_B64", "").strip()
 
 def _try_load_sa_from_secrets():
@@ -101,8 +100,7 @@ def _try_load_sa_from_secrets():
 
 def _try_load_sa_from_env():
     raw = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON") or os.environ.get("SERVICE_ACCOUNT_JSON")
-    if not raw:
-        return None
+    if not raw: return None
     try:
         raw = raw.strip()
         if raw.lstrip().startswith("{"):
@@ -121,23 +119,47 @@ def _try_load_sa_from_file():
     return None
 
 def _try_load_sa_from_embedded():
-    if not EMBEDDED_SA_B64:
-        return None
+    if not EMBEDDED_SA_B64: return None
     try:
         return json.loads(base64.b64decode(EMBEDDED_SA_B64).decode("utf-8"))
     except Exception:
         return None
 
+def _detect_sa_source():
+    try:
+        if "gcp_service_account" in st.secrets or "service_account" in st.secrets:
+            return "secrets"
+    except Exception:
+        pass
+    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON") or os.environ.get("SERVICE_ACCOUNT_JSON"):
+        return "env"
+    for p in ("./service_account.json", "/mount/data/service_account.json", "/mnt/data/service_account.json"):
+        if os.path.exists(p):
+            return "file"
+    if EMBEDDED_SA_B64:
+        return "embedded"
+    return "uploader"
+
+def _current_sa_info():
+    src = _detect_sa_source()
+    info = None
+    try:
+        if src == "secrets":   info = _try_load_sa_from_secrets()
+        elif src == "env":     info = _try_load_sa_from_env()
+        elif src == "file":    info = _try_load_sa_from_file()
+        elif src == "embedded":info = _try_load_sa_from_embedded()
+    except Exception:
+        info = None
+    return src, info
+
 @st.cache_resource(show_spinner=False)
 def _get_gspread_client():
-    info = (
-        _try_load_sa_from_secrets()
-        or _try_load_sa_from_env()
-        or _try_load_sa_from_file()
-        or _try_load_sa_from_embedded()
-    )
+    info = (_try_load_sa_from_secrets()
+            or _try_load_sa_from_env()
+            or _try_load_sa_from_file()
+            or _try_load_sa_from_embedded())
     if info is None:
-        # very last fallback – only shows once when none of the above are configured
+        # Last fallback only when no persistent source was configured
         file = st.file_uploader("อัปโหลดไฟล์ service_account.json", type=["json"], key="sa_json_once")
         if not file:
             st.stop()
@@ -145,16 +167,7 @@ def _get_gspread_client():
     creds = Credentials.from_service_account_info(info, scopes=GOOGLE_SCOPES)
     return gspread.authorize(creds)
 
-@st.cache_resource(show_spinner=False)
-def open_sheet_by_url(sheet_url: str):
-    gc = _get_gspread_client()
-    return gc.open_by_url(sheet_url)
 
-@st.cache_resource(show_spinner=False)
-def open_sheet_by_key(key: str):
-    gc = _get_gspread_client()
-    return gc.open_by_key(key)
-# ===== End Fixed =====
 
     @st.cache_resource(show_spinner=False)
     def _gc():
@@ -162,21 +175,8 @@ def open_sheet_by_key(key: str):
         return get_client()
 
     
-def open_sheet_by_url(sheet_url: str):
-    """Open spreadsheet by URL with caching."""
-    return _open_sheet_by_url_nocache(str(sheet_url).strip())
 
 
-def open_sheet_by_key(sheet_key: str):
-    """Open spreadsheet by key with caching."""
-    return _open_sheet_by_key_nocache(str(sheet_key).strip())
-
-# ===== END FIX =====
-
-
-# ---- Compatibility helper for Streamlit rerun ----
-
-# -------------------- User helper --------------------
 def get_username():
     """
     ดึงชื่อผู้ใช้จาก session_state ให้รองรับหลาย key
