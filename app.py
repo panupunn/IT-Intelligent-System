@@ -85,10 +85,16 @@ except NameError:
         # reuse the global get_client()
         return get_client()
 
-    def open_sheet_by_url(sheet_url: str):
+    
+def open_sheet_by_url(sheet_url: str):
+    """Open spreadsheet by URL with caching."""
     return _cached_open_sheet_by_url(str(sheet_url).strip())
+
+
 def open_sheet_by_key(sheet_key: str):
+    """Open spreadsheet by key with caching."""
     return _cached_open_sheet_by_key(str(sheet_key).strip())
+
 # ===== END FIX =====
 
 
