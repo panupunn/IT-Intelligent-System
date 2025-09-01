@@ -153,8 +153,8 @@ def open_sheet_by_url(sheet_url: str):
 
 @st.cache_resource(show_spinner=False)
 
+
 def _detect_sa_source():
-    # Diagnostic helper to display where credentials came from
     try:
         if "gcp_service_account" in st.secrets or "service_account" in st.secrets:
             return "secrets"
@@ -168,6 +168,26 @@ def _detect_sa_source():
     if EMBEDDED_SA_B64:
         return "embedded"
     return "uploader"
+
+
+def _current_sa_info():
+    """Return (source, info_dict_or_None) for diagnostics/UI; never raises."""
+    src = _detect_sa_source()
+    info = None
+    try:
+        if src == "secrets":
+            info = _try_load_sa_from_secrets()
+        elif src == "env":
+            info = _try_load_sa_from_env()
+        elif src == "file":
+            info = _try_load_sa_from_file()
+        elif src == "embedded":
+            info = _try_load_sa_from_embedded()
+    except Exception:
+        info = None
+    return src, info
+
+
 
 def open_sheet_by_key(key: str):
     gc = _get_gspread_client()
