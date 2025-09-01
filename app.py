@@ -24,6 +24,8 @@ from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
 import bcrypt
 import altair as alt
+import json
+import base64
 
 # ---- Compatibility helper for Streamlit rerun ----
 
@@ -161,17 +163,19 @@ def get_client():
     Build a gspread client from (secrets/env/file). No interactive prompt after app wakes.
     """
     mode, sa_info = _ensure_credentials_available()
-    scopes = ["https://www.googleapis.com/auth/spreadsheets",
-              "https://www.googleapis.com/auth/drive"]
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
 
     if mode == "secrets":
         creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
     else:
         creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
 
-    return gspread.authorize(creds)def open_sheet_by_url(sheet_url: str):
-    gc = get_client()
-    return gc.open_by_url(sheet_url)
+    return gspread.authorize(creds)
+
+
 
 
 def ensure_sheets_exist(sh):
