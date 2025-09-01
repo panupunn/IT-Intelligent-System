@@ -1,4 +1,12 @@
+import streamlit as st
 
+# --- Defensive shim for cache_resource (older Streamlit) ---
+if not hasattr(st, "cache_resource"):
+    def _no_cache_decorator(*args, **kwargs):
+        def _wrap(func): return func
+        return _wrap
+    st.cache_resource = _no_cache_decorator
+# -----------------------------------------------------------
 # ----- Compatibility wrappers (avoid NameError in legacy pages) -----
 try:
     open_sheet_by_url
@@ -2217,4 +2225,3 @@ def page_users(sh):
 
 if __name__ == "__main__":
     main()
-
