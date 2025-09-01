@@ -87,8 +87,7 @@ GOOGLE_SCOPES = [
 ]
 
 # Optional: embed Base64 credential via ENV or constant
-EMBEDDED_SA_B64_CONST = "ewogICJ0eXBlIjogInNlcnZpY2VfYWNjb3VudCIsCiAgInByb2plY3RfaWQiOiAicmVkLWZyZWVkb20tNDcwMjA3LWUzIiwKICAicHJpdmF0ZV9rZXlfaWQiOiAiM2Q3ZmRjZmJiODFiMTFhMjg1MGUyMTk2ODUyMTIzNjMwMzlkNDcwNSIsCiAgInByaXZhdGVfa2V5IjogIi0tLS0tQkVHSU4gUFJJVkFURSBLRVktLS0tLVxuTUlJRXZnSUJBREFOQmdrcWhraUc5dzBCQVFFRkFBU0NCS2d3Z2dTa0FnRUFBb0lCQVFEV2IyYXhUa05yanI4eFxuZUpweVdmUkVZSitJL2lPY0pNVTZGeXQ2cUVYbWpKSzBua3FVekZHdWU4eFFYbXgvSitmN1NQSklqOG9ZOFY1S1xuajNhWGYyN2dEdGFQTnBPQ0pWNDAySEpBcTVyb0c4Ui9JY09SdE9VYXNvcXZRSThrMGFHR2NxWGtVejBDbDZlTFxud2pNd3J1RGtQaVNvbzRGRll2Q0dTaXN3TTM3WGp4anpzTUh2cHM1Ykl4V0lWRkxjZ3EwZXgybEo5bTdKbDdBTVxuV1p5OUkyRThFd3pUMjZWbGo5U3ZZVkV4bjFNSlZoTnBrblpJWTJvckI1eVpNN0VzYVptWDh5OUxQY3UvL05OOFxuZzdMOTExRDZQRUNya29QNkFjUndaQUZCVlJFWkVscXNuVVpGVDJDZGMrU2l5bWZrUWJwRHp6aFBZM3BtMnkvZlxuZnd3NEVreFpBZ01CQUFFQ2dnRUFBV0xZZnV6WW5xZThNcml6YS9Kb3RmbWtMMjFIaHVwTHFwekRRMG1MeGlCeFxuWE55SEZQVVYwZk1WeDhpdW1vYmlBclJSK2E1dk1vQUREY29oU0ZuaW9LQlkvcVIydEY1L0luOXl2M3hXRnVmd1xuNlRFUnR2N1dIbzVjS2lNKzdlWFZJdlpSRjd6RzhLNzdyVTdsNUFNcng1VmpIbWpoZnBzWUZuYXJyQkNYalFJbFxuN1JGNDVrYnVtaEI3enhJQUp4aCszSnVRV2s0YWlWNEY2aGdBczJFS09yV0xJSmxpbUZ4aGgyT1Q1QTNvdGlOK1xucW8zZFYrMXBGM2lIL1BrNndtbnhDZFUzekp0MDA2dno5RFA2N1NTbUZ3bkZOeTlQOG8rNWxtZkFha0ZSWXhrRVxubGZzdlZmQXowbVgvZWRxM2NMbWpTUGppSTNlek12eDArTHk1YnZvS2dRS0JnUUQxcGZtVHl5LzlTVmppcGVjTVxuaVBBb0xkSXhYcVdwL2xQa2d0NTErcjRXbmtwR244WlZGWUhNMTM0U0xsOGVJTmxrVGRvTExFMWxrN0tXNnRvbFxuR0FWRWk5TzFnVkt0MVQ4K1ZMTGgreGVpSVlEM1BEQm92Qk9uRzVWc0U5cTBncHFDeURDT1I3eGxRTitIYU1GRlxubXVJb21sUVBCbzA3ZFFiaWZ6QnpOb0E5SVFLQmdRRGZlTFBCVnQwT1l6ZXNVTDdYUFNvQWRSb2F1dlUyZXN3RFxudE14NURpdUVBOU4zNXJTbVlJR080YUlPQm5RaTZWNmJkWStDVEtPSVZzZUtlM285Wk95Q1RlL2d5UzRJT2RYQ1xuVjl0VlpkNU0vN0UrUXpabGNmb0hxTGhWRSsvRllpYzRVWDltd2xTQWFEQ3czclg4YVk0aVNNQ2J5YnJwV0NuR1xuZGVjbzdiNndPUUtCZ0VVZ0FZMVBYaCsrWmg3UlpLVW9XN3hTdUpWZjl1cFJRVFpLaFdOWnZlZ0xmd2RFcXNFQ1xubmxZUVJjL0Q4TXcvbmkwVm8wZ0ZuWG42Q0FWajdTTUhFV1JxbkphMDM1ay9LdDdWWXNrb3FVdmNkYmdjM2RwN1xuSW1TaDVIaFhWZkg1MXBUNjFIOFZQTFNaZnMxUjh5RXRKbnNhZ3BELzNQcGdRaUcyZk9ITzhtTkJBb0dCQUlaUlxuUjBIYkV1MFY1NTJUdnRFaU96K2hJdnFVQ3RVZkE4YnFnY2YxSTJTcTVBejZSdlNGcHZtWlZzMDFSZExDRUJKQ1xubStwR1pEaUxhRTR0SDNFTld6YUszN1p0VlZTdVpuUDBXS25BbTlnT0M1dVB6SDgyL1lCakFjQnBSa0dPV0dKNlxuWWFnQy84VmFXb0hFcXYrMjlpNVhLaVc1SDdZblBwekJ1eG9Yby9qSkFvR0JBTllLb21FVExxOXYyWU4wekVTQlxubjVEYVJPOTNjbW9tSzVUdXovUCtwSHZpRWNmM0VuMi9JVXUyZTkyU3ZYYTFlR3FHbHZ6VDdQVzRJOGc4cUVUblxuQXNKZ1ptZGh5TGM3YzBZWHJDdWFrd1dGTGMwenFpZnBHWE4ydVpkZ0NiTjkxSGhkY1pKRkpkSnRvM1hld093SVxubFcvaTNjblVTTGhHQytuSExvcmswRjV4XG4tLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tXG4iLAogICJjbGllbnRfZW1haWwiOiAic3RvY2tpdEByZWQtZnJlZWRvbS00NzAyMDctZTMuaWFtLmdzZXJ2aWNlYWNjb3VudC5jb20iLAogICJjbGllbnRfaWQiOiAiMTA0OTQ4Nzk2OTg3MDM0NDM5NDA4IiwKICAiYXV0aF91cmkiOiAiaHR0cHM6Ly9hY2NvdW50cy5nb29nbGUuY29tL28vb2F1dGgyL2F1dGgiLAogICJ0b2tlbl91cmkiOiAiaHR0cHM6Ly9vYXV0aDIuZ29vZ2xlYXBpcy5jb20vdG9rZW4iLAogICJhdXRoX3Byb3ZpZGVyX3g1MDlfY2VydF91cmwiOiAiaHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vb2F1dGgyL3YxL2NlcnRzIiwKICAiY2xpZW50X3g1MDlfY2VydF91cmwiOiAiaHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vcm9ib3QvdjEvbWV0YWRhdGEveDUwOS9zdG9ja2l0JTQwcmVkLWZyZWVkb20tNDcwMjA3LWUzLmlhbS5nc2VydmljZWFjY291bnQuY29tIiwKICAidW5pdmVyc2VfZG9tYWluIjogImdvb2dsZWFwaXMuY29tIgp9Cg=="
-EMBEDDED_SA_B64 = (os.environ.get("EMBEDDED_SA_B64", "").strip() or EMBEDDED_SA_B64_CONST)
+EMBEDDED_SA_B64 = os.environ.get("EMBEDDED_SA_B64", "").strip()
 
 def _try_load_sa_from_secrets():
     try:
@@ -152,43 +151,6 @@ def open_sheet_by_url(sheet_url: str):
     return gc.open_by_url(sheet_url)
 
 @st.cache_resource(show_spinner=False)
-
-
-def _detect_sa_source():
-    try:
-        if "gcp_service_account" in st.secrets or "service_account" in st.secrets:
-            return "secrets"
-    except Exception:
-        pass
-    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON") or os.environ.get("SERVICE_ACCOUNT_JSON"):
-        return "env"
-    for p in ("./service_account.json", "/mount/data/service_account.json", "/mnt/data/service_account.json"):
-        if os.path.exists(p):
-            return "file"
-    if EMBEDDED_SA_B64:
-        return "embedded"
-    return "uploader"
-
-
-def _current_sa_info():
-    """Return (source, info_dict_or_None) for diagnostics/UI; never raises."""
-    src = _detect_sa_source()
-    info = None
-    try:
-        if src == "secrets":
-            info = _try_load_sa_from_secrets()
-        elif src == "env":
-            info = _try_load_sa_from_env()
-        elif src == "file":
-            info = _try_load_sa_from_file()
-        elif src == "embedded":
-            info = _try_load_sa_from_embedded()
-    except Exception:
-        info = None
-    return src, info
-
-
-
 def open_sheet_by_key(key: str):
     gc = _get_gspread_client()
     return gc.open_by_key(key)
