@@ -1921,3 +1921,126 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def page_users(sh):
+    """จัดการผู้ใช้ (เพิ่ม/แก้ไข/ลบ) — ปลอดภัยและใช้งานได้จริง"""
+    import pandas as pd
+    import bcrypt
+    st.subheader("👥 ผู้ใช้ & สิทธิ์ (Admin)")
+    # โหลดข้อมูลผู้ใช้
+    try:
+        users = read_df(sh, SHEET_USERS, USERS_HEADERS)
+    except Exception as e:
+        st.error(f"โหลดข้อมูลผู้ใช้ไม่สำเร็จ: {e}")
+        return
+
+    # ตรวจให้มีคอลัมน์พื้นฐานครบ
+    for col in ["Username", "DisplayName", "Role", "PasswordHash", "Active"]:
+        if col not in users.columns:
+            users[col] = ""
+    users = users[["Username", "DisplayName", "Role", "PasswordHash", "Active"]].fillna("")
+
+    # ตารางแสดงผู้ใช้ (อ่านอย่างเดียว)
+    st.dataframe(
+        users[["Username", "DisplayName", "Role", "PasswordHash", "Active"]],
+        use_container_width=True, height=260
+    )
+
+    st.markdown("### เพิ่ม/แก้ไข ผู้ใช้")
+
+    # เลือกผู้ใช้เพื่อโหลดค่าเดิม (หรือเลือก '— เพิ่มผู้ใช้ใหม่ —')
+    choices = ["— เพิ่มผู้ใช้ใหม่ —"] + users["Username"].astype(str).tolist()
+    sel_user = st.selectbox("เลือกผู้ใช้เพื่อแก้ไข", options=choices, index=0)
+
+    # เติมค่าเดิมถ้าเลือกผู้ใช้
+    default = {"Username":"", "DisplayName":"", "Role":"staff", "Active":"Y", "PasswordHash":""}
+    if sel_user != "— เพิ่มผู้ใช้ใหม่ —":
+        row = users[users["Username"] == sel_user]
+        if not row.empty:
+            r = row.iloc[0].to_dict()
+            default.update(r)
+
+    # ฟอร์มแก้ไข/เพิ่ม
+    with st.form("user_form", clear_on_submit=False):
+        c1, c2 = st.columns([2,1])
+        with c1:
+            username = st.text_input("Username", value=default["Username"])
+            display  = st.text_input("Display Name", value=default["DisplayName"])
+        with c2:
+            role  = st.selectbox("Role", options=["admin","staff","viewer"],
+                                 index=["admin","staff","viewer"].index(default["Role"]) if default["Role"] in ["admin","staff","viewer"] else 1)
+            active = st.selectbox("Active", options=["Y","N"],
+                                  index=["Y","N"].index(default["Active"]) if default["Active"] in ["Y","N"] else 0)
+
+        # ตั้ง/รีเซ็ตรหัสผ่าน (ปล่อยว่าง = ไม่เปลี่ยน)
+        pwd = st.text_input("ตั้ง/รีเซ็ตรหัสผ่าน", type="password", placeholder="ปล่อยว่างหากไม่เปลี่ยน")
+
+        c3, c4, c5 = st.columns([1,1,1])
+        save_btn = c3.form_submit_button("บันทึกผู้ใช้", use_container_width=True, type="primary")
+        del_btn  = c4.form_submit_button("ลบผู้ใช้", use_container_width=True)
+        clear_btn= c5.form_submit_button("ล้างฟอร์ม", use_container_width=True)
+
+    # กดล้างฟอร์ม
+    if clear_btn:
+        st.session_state.pop("user_form", None)
+        st.rerun()
+
+    # ลบผู้ใช้
+    if del_btn:
+        if not username:
+            st.warning("กรุณาเลือกผู้ใช้ก่อนลบ")
+        elif username.lower() == "admin":
+            st.error("ห้ามลบผู้ใช้ admin")
+        else:
+            before = len(users)
+            users = users[users["Username"] != username]
+            try:
+                write_df(sh, SHEET_USERS, users)
+                try: st.cache_data.clear()
+                except Exception: pass
+                st.success(f"ลบผู้ใช้ {username} สำเร็จ")
+                st.rerun()
+            except Exception as e:
+                st.error(f"ลบผู้ใช้ไม่สำเร็จ: {e}")
+
+    # บันทึกผู้ใช้ (เพิ่ม/แก้ไข)
+    if save_btn:
+        if not username:
+            st.warning("กรุณากรอก Username"); return
+        if sel_user == "— เพิ่มผู้ใช้ใหม่ —" and (users["Username"] == username).any():
+            st.error("มี Username นี้อยู่แล้ว"); return
+
+        # สร้าง/อัปเดตแถว
+        if (users["Username"] == username).any():
+            # แก้ไข
+            idx = users.index[users["Username"] == username][0]
+            users.at[idx, "DisplayName"] = display
+            users.at[idx, "Role"]        = role
+            users.at[idx, "Active"]      = active
+            if pwd.strip():
+                # เปลี่ยนรหัสผ่าน
+                ph = bcrypt.hashpw(pwd.encode("utf-8"), bcrypt.gensalt(12)).decode("utf-8")
+                users.at[idx, "PasswordHash"] = ph
+        else:
+            # เพิ่มใหม่ -> ต้องมีรหัสผ่าน
+            if not pwd.strip():
+                st.error("ผู้ใช้ใหม่ต้องกำหนดรหัสผ่าน"); return
+            ph = bcrypt.hashpw(pwd.encode("utf-8"), bcrypt.gensalt(12)).decode("utf-8")
+            new_row = pd.DataFrame([{
+                "Username": username.strip(),
+                "DisplayName": display.strip(),
+                "Role": role,
+                "PasswordHash": ph,
+                "Active": active,
+            }])
+            users = pd.concat([users, new_row], ignore_index=True)
+
+        # เขียนกลับชีต + เคลียร์แคช + รีรัน
+        try:
+            write_df(sh, SHEET_USERS, users)
+            try: st.cache_data.clear()
+            except Exception: pass
+            st.success("บันทึกผู้ใช้สำเร็จ")
+            st.rerun()
+        except Exception as e:
+            st.error(f"บันทึกไม่สำเร็จ: {e}")
