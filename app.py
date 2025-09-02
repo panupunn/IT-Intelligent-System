@@ -1073,8 +1073,6 @@ def page_reports(sh):
         out_df = df_f[df_f["ประเภท"] == "OUT"].copy().sort_values("วันเวลา", ascending=False)
         cols = [c for c in ["วันเวลา", "ชื่ออุปกรณ์", "จำนวน", "สาขา", "ผู้ดำเนินการ", "หมายเหตุ", "รหัส"] if c in out_df.columns]
         st.dataframe(out_df[cols], height=320, use_container_width=True)
-
-    
         # --- ADD: พิมพ์ตาราง OUT เป็น PDF (ไม่แตะส่วนอื่น) ---
         with st.expander("🖨️ พิมพ์รายงาน OUT เป็น PDF", expanded=False):
             up_logo = st.file_uploader("โลโก้ (PNG/JPG) — ไม่บังคับ", type=["png","jpg","jpeg"], key="logo_out")
@@ -1179,13 +1177,12 @@ def page_reports(sh):
                             mime="application/pdf",
                             use_container_width=True
                         )
-with tTickets:
+
+    with tTickets:
         st.markdown("#### ตารางรายการแจ้งปัญหา")
         show_cols = [c for c in ["วันที่แจ้ง","เรื่อง","รายละเอียด","สาขา","ผู้แจ้ง","สถานะ","ผู้รับผิดชอบ","หมายเหตุ","TicketID"] if c in tdf.columns]
         tdf_sorted = tdf.sort_values("วันที่แจ้ง", ascending=False)
         st.dataframe(tdf_sorted[show_cols], height=320, use_container_width=True)
-
-    
         # --- ADD: พิมพ์ตาราง Tickets เป็น PDF (ไม่แตะส่วนอื่น) ---
         with st.expander("🖨️ พิมพ์รายงาน Tickets เป็น PDF", expanded=False):
             up_logo2 = st.file_uploader("โลโก้ (PNG/JPG) — ไม่บังคับ", type=["png","jpg","jpeg"], key="logo_tk")
@@ -1290,7 +1287,8 @@ with tTickets:
                             mime="application/pdf",
                             use_container_width=True
                         )
-def group_period(df, period="ME"):
+
+    def group_period(df, period="ME"):
         dfx = df.copy()
         dfx["วันเวลา"] = pd.to_datetime(dfx["วันเวลา"], errors='coerce')
         dfx = dfx.dropna(subset=["วันเวลา"])
