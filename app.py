@@ -37,10 +37,12 @@ SHEET_BRANCHES    = "Branches"
 SHEET_TICKETS     = "Tickets"
 SHEET_TICKET_CATS = "TicketCategories"
 
-# >>> PATCH: Requests integration constants
-MENU_REQUESTS = "🧺 คำขอเบิก"
-REQUESTS_SHEET = "Requests"
-NOTIFS_SHEET = "Notifications"
+MENU_REQUESTS   = "🧺 คำขอเบิก"
+SHEET_REQUESTS  = "Requests"
+SHEET_NOTIFS    = "Notifications"
+
+REQUESTS_HEADERS = ["Branch","Requester","CreatedAt","OrderNo","ItemCode","ItemName","Qty","Status","Approver","LastUpdate","Note"]
+NOTIFS_HEADERS   = ["NotiID","CreatedAt","TargetApp","TargetBranch","Type","RefID","Message","ReadFlag","ReadAt"]
 
 
 ITEMS_HEADERS     = ["รหัส","หมวดหมู่","ชื่ออุปกรณ์","หน่วย","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ","ใช้งาน"]
@@ -271,7 +273,9 @@ def ensure_sheets_exist(sh):
         (SHEET_BRANCHES, BR_HEADERS, 200, len(BR_HEADERS)+2),
         (SHEET_TICKETS, TICKETS_HEADERS, 1000, len(TICKETS_HEADERS)+5),
         (SHEET_TICKET_CATS, TICKET_CAT_HEADERS, 200, len(TICKET_CAT_HEADERS)+2),
-    ]
+            (SHEET_REQUESTS, REQUESTS_HEADERS, 1000, len(REQUESTS_HEADERS)+5),
+        (SHEET_NOTIFS,   NOTIFS_HEADERS,   1000, len(NOTIFS_HEADERS)+5),
+]
 
     try:
         titles = [ws.title for ws in sh.worksheets()]
@@ -1674,11 +1678,109 @@ def page_settings():
     st.session_state["sheet_url"] = url
     if st.button("ทดสอบเชื่อมต่อ/ตรวจสอบชีตที่จำเป็น", use_container_width=True):
         try:
-            sh = open_sheet_by_url(url); ensure_sheets_exist(sh); ensure_requests_notifs_sheets(sh); st.success("เชื่อมต่อสำเร็จ พร้อมใช้งาน")
+            sh = open_sheet_by_url(url); ensure_sheets_exist(sh); st.success("เชื่อมต่อสำเร็จ พร้อมใช้งาน")
         except Exception as e:
             st.error(f"เชื่อมต่อไม่สำเร็จ: {e}")
 
     st.markdown("</div>", unsafe_allow_html=True)
+
+# -------------------- Requests Page --------------------
+def page_requests(sh):
+    import pandas as pd, streamlit as st, uuid, datetime
+    st.header("🧺 คำขอเบิก (Requests)")
+    try:
+        ws_req = sh.worksheet(SHEET_REQUESTS)
+    except Exception as e:
+        st.error(f"ไม่พบชีต {SHEET_REQUESTS}: {e}")
+        return
+    rows = ws_req.get_all_records()
+    df = pd.DataFrame(rows).fillna("")
+    if df.empty:
+        st.info("ยังไม่มีคำขอเบิกจากสาขา")
+        return
+    pending = df[df["Status"].isin(["", "PENDING"])].copy()
+    if pending.empty:
+        st.success("ไม่มีคำขอที่รออนุมัติ")
+        return
+
+    order_nos = pending["OrderNo"].dropna().unique().tolist()
+    col = st.columns([3,1,1])
+    sel = col[0].selectbox("เลือก OrderNo", order_nos)
+    current = pending[pending["OrderNo"] == sel]
+    st.write(f"**สาขา:** {current['Branch'].iloc[0]}  |  **ผู้ขอ:** {current['Requester'].iloc[0]}  |  **จำนวนรายการ:** {len(current)}")
+    st.dataframe(current[["ItemCode","ItemName","Qty"]], use_container_width=True, hide_index=True)
+
+    if col[1].button("✅ อนุมัติและตัดสต็อก"):
+        _approve_request_and_cut_stock(sh, current)
+        st.success("อนุมัติคำขอเรียบร้อย")
+        st.experimental_rerun()
+    if col[2].button("❌ ปฏิเสธ"):
+        _update_requests_status(sh, current, status="REJECTED")
+        _append_notification(sh, current, "คำขอถูกปฏิเสธ")
+        st.warning("ปฏิเสธแล้ว")
+        st.experimental_rerun()
+
+def _approve_request_and_cut_stock(sh, current_df):
+    # reuse adjust_stock if present; else minimally append to Transactions and reduce Items
+    import pandas as pd, datetime
+    actor = st.session_state.get("username","system")
+    # attempt to use adjust_stock if defined
+    if 'adjust_stock' in globals():
+        for _, r in current_df.iterrows():
+            try:
+                adjust_stock(sh, item_code=r["ItemCode"], qty=int(r["Qty"]), txn_type="OUT",
+                             branch=r.get("Branch",""), actor=actor, note=f"Request {r['OrderNo']}")
+            except Exception as e:
+                st.error(f"ตัดสต็อก {r['ItemCode']} ไม่สำเร็จ: {e}")
+    else:
+        # fallback minimal: append to Transactions
+        try:
+            ws_tx = sh.worksheet(SHEET_TXNS)
+            for _, r in current_df.iterrows():
+                ws_tx.append_row([str(uuid.uuid4())[:8], datetime.datetime.now().isoformat(timespec="seconds"),
+                                  "OUT", r["ItemCode"], r["ItemName"], r.get("Branch",""), int(r["Qty"]), actor,
+                                  f"Request {r['OrderNo']}"])
+        except Exception as e:
+            st.error(f"บันทึกธุรกรรมไม่สำเร็จ: {e}")
+    _update_requests_status(sh, current_df, status="FULFILLED")
+    _append_notification(sh, current_df, "คำขอได้รับการอนุมัติแล้ว")
+
+def _update_requests_status(sh, current_df, status):
+    import pandas as pd, datetime, gspread_dataframe as gd
+    ws = sh.worksheet(SHEET_REQUESTS)
+    data = ws.get_all_records()
+    df = pd.DataFrame(data).fillna("")
+    for _, r in current_df.iterrows():
+        mask = (df["OrderNo"] == r["OrderNo"]) & (df["ItemCode"] == r["ItemCode"])
+        df.loc[mask, "Status"] = status
+        df.loc[mask, "Approver"] = st.session_state.get("username","system")
+        df.loc[mask, "LastUpdate"] = datetime.datetime.now().isoformat(timespec="seconds")
+    gd.set_with_dataframe(ws, df, include_index=False)
+
+def _append_notification(sh, current_df, message):
+    import pandas as pd, uuid, datetime, gspread_dataframe as gd
+    try:
+        ws = sh.worksheet(SHEET_NOTIFS)
+    except Exception:
+        ws = sh.add_worksheet(SHEET_NOTIFS, rows=1000, cols=len(NOTIFS_HEADERS)+2)
+        ws.update("A1", [NOTIFS_HEADERS])
+    base = ws.get_all_records()
+    df = pd.DataFrame(base)
+    if df.empty:
+        df = pd.DataFrame(columns=NOTIFS_HEADERS)
+    for _, r in current_df.iterrows():
+        df.loc[len(df)] = {
+            "NotiID": str(uuid.uuid4())[:8],
+            "CreatedAt": datetime.datetime.now().isoformat(timespec="seconds"),
+            "TargetApp":"branch",
+            "TargetBranch": r.get("Branch",""),
+            "Type":"request",
+            "RefID": r["OrderNo"],
+            "Message": message,
+            "ReadFlag":"",
+            "ReadAt":""
+        }
+    gd.set_with_dataframe(ws, df, include_index=False)
 
 # -------------------- Main --------------------
 def main():
@@ -1693,7 +1795,7 @@ def main():
 
     with st.sidebar:
         st.markdown("---")
-        page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","🧺 คำขอเบิก","🧺 คำขอเบิก","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
+        page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
 
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
     if not sheet_url:
@@ -1702,7 +1804,7 @@ def main():
         sh = open_sheet_by_url(sheet_url)
     except Exception as e:
         st.error(f"เปิดชีตไม่สำเร็จ: {e}"); return
-    ensure_sheets_exist(sh); ensure_requests_notifs_sheets(sh)
+    ensure_sheets_exist(sh)
 
     auth_block(sh)
 
@@ -1720,122 +1822,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# >>> PATCH: ensure Requests/Notifications sheets and Requests page
-def ensure_requests_notifs_sheets(sh):
-    try:
-        titles = [w.title for w in sh.worksheets()]
-    except Exception:
-        titles = []
-    def _ensure(name, headers):
-        try:
-            if name not in titles:
-                ws = sh.add_worksheet(name, rows=1000, cols=max(10,len(headers)+2))
-                try:
-                    import pandas as pd, gspread_dataframe as gd
-                    gd.set_with_dataframe(ws, pd.DataFrame(columns=headers), include_index=False)
-                except Exception:
-                    ws.update("A1", [headers])
-        except Exception as e:
-            import streamlit as st
-            st.warning(f"สร้างชีต {name} ไม่สำเร็จ: {e}")
-    _ensure(REQUESTS_SHEET, ["Branch","Requester","CreatedAt","OrderNo","ItemCode","ItemName","Qty","Status","Approver","LastUpdate","Note"])
-    _ensure(NOTIFS_SHEET, ["NotiID","CreatedAt","TargetApp","TargetBranch","Type","RefID","Message","ReadFlag","ReadAt"])
-
-def page_requests(sh):
-    import streamlit as st, pandas as pd, uuid, datetime
-    st.header("🧺 คำขอเบิก (Requests)")
-    try:
-        ws = sh.worksheet(REQUESTS_SHEET)
-        rows = ws.get_all_records()
-    except Exception as e:
-        st.error(f"อ่านชีต {REQUESTS_SHEET} ไม่ได้: {e}")
-        return
-    df = pd.DataFrame(rows).fillna("")
-    if df.empty:
-        st.info("ยังไม่มีคำขอจากสาขา")
-        return
-    pending = df[df["Status"].isin(["","PENDING"])].copy()
-    if pending.empty:
-        st.success("ไม่มีคำขอที่รออนุมัติ")
-        return
-    order_nos = pending["OrderNo"].dropna().unique().tolist()
-    sel = st.selectbox("เลือก OrderNo", order_nos)
-    cur = pending[pending["OrderNo"]==sel]
-    st.write(f"**สาขา:** {cur['Branch'].iloc[0]}  |  **ผู้ขอ:** {cur['Requester'].iloc[0]}")
-    st.dataframe(cur[["ItemCode","ItemName","Qty"]], use_container_width=True)
-    c1,c2 = st.columns(2)
-    if c1.button("✅ อนุมัติและตัดสต็อก", use_container_width=True):
-        _approve_request_and_cut_stock(sh, cur)
-        st.success("อนุมัติแล้ว")
-        st.experimental_rerun()
-    if c2.button("❌ ปฏิเสธ", use_container_width=True):
-        _reject_request(sh, cur)
-        st.warning("ปฏิเสธแล้ว")
-        st.experimental_rerun()
-
-def _approve_request_and_cut_stock(sh, cur):
-    import streamlit as st, pandas as pd, datetime
-    # Try to call existing adjust_stock signature; fallback to Txns append only
-    actor = st.session_state.get("user") or st.session_state.get("username","system")
-    for _, r in cur.iterrows():
-        try:
-            # existing function in app
-            adjust_stock(sh, item_code=r["ItemCode"], qty=int(r["Qty"]), txn_type="OUT",
-                         branch=r.get("Branch",""), actor=actor, note=f"Request {r['OrderNo']}")
-        except Exception:
-            # fallback write to Transactions only
-            try:
-                ws_items = sh.worksheet(SHEET_ITEMS)
-                items = ws_items.get_all_records()
-                name = ""
-                for it in items:
-                    if str(it.get("รหัส"))==str(r["ItemCode"]):
-                        name = it.get("ชื่ออุปกรณ์","")
-                        break
-                ws = sh.worksheet(SHEET_TXNS)
-                ws.append_row([str(uuid.uuid4())[:8], datetime.datetime.now().isoformat(sep=" ", timespec="seconds"),
-                               "OUT", r["ItemCode"], name, r.get("Branch",""), int(r["Qty"]), actor, f"Request {r['OrderNo']}"])
-            except Exception as e:
-                st.error(f"ตัดสต็อก/บันทึกธุรกรรมไม่สำเร็จ: {e}")
-    _update_requests_status(sh, cur, "FULFILLED"); _append_notification(sh, cur, "คำขอได้รับการอนุมัติแล้ว")
-
-def _reject_request(sh, cur):
-    _update_requests_status(sh, cur, "REJECTED"); _append_notification(sh, cur, "คำขอถูกปฏิเสธ")
-
-def _update_requests_status(sh, cur, status):
-    import pandas as pd, streamlit as st, gspread_dataframe as gd, datetime
-    ws = sh.worksheet(REQUESTS_SHEET)
-    base = pd.DataFrame(ws.get_all_records()).fillna("")
-    for _, r in cur.iterrows():
-        mask = (base["OrderNo"]==r["OrderNo"]) & (base["ItemCode"]==r["ItemCode"])
-        base.loc[mask, "Status"] = status
-        base.loc[mask, "Approver"] = st.session_state.get("user") or st.session_state.get("username","system")
-        base.loc[mask, "LastUpdate"] = datetime.datetime.now().isoformat(timespec="seconds")
-    gd.set_with_dataframe(ws, base, include_index=False)
-
-def _append_notification(sh, cur, msg):
-    import pandas as pd, gspread_dataframe as gd, datetime, uuid
-    try:
-        ws = sh.worksheet(NOTIFS_SHEET)
-        base = pd.DataFrame(ws.get_all_records())
-        if base.empty:
-            base = pd.DataFrame(columns=["NotiID","CreatedAt","TargetApp","TargetBranch","Type","RefID","Message","ReadFlag","ReadAt"])
-    except Exception:
-        ws = sh.add_worksheet(NOTIFS_SHEET, rows=1000, cols=10)
-        base = pd.DataFrame(columns=["NotiID","CreatedAt","TargetApp","TargetBranch","Type","RefID","Message","ReadFlag","ReadAt"])
-    notis=[]
-    for _, r in cur.iterrows():
-        notis.append({
-            "NotiID": str(uuid.uuid4())[:8],
-            "CreatedAt": datetime.datetime.now().isoformat(timespec="seconds"),
-            "TargetApp": "branch",
-            "TargetBranch": r.get("Branch",""),
-            "Type": "request",
-            "RefID": r["OrderNo"],
-            "Message": msg,
-            "ReadFlag": "",
-            "ReadAt": ""
-        })
-    base = pd.concat([base, pd.DataFrame(notis)], ignore_index=True)
-    gd.set_with_dataframe(ws, base, include_index=False)
