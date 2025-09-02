@@ -13,6 +13,7 @@ Stable hotfix with restored multi-issue (OUT) flow.
 - Version footer: iTao iT (V.1.1)
 """
 from __future__ import annotations
+
 import os, io, uuid, re, time, base64, json
 from datetime import datetime, date, timedelta, time as dtime
 import pytz, pandas as pd, streamlit as st
@@ -1704,10 +1705,6 @@ def main():
     with st.sidebar:
         st.markdown("---")
         page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
-    # PATCH: direct route for Requests menu
-    if isinstance(page, str) and (page == MENU_REQUESTS or page.startswith('🧺')):
-        page_requests(sh)
-        return
 
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
     if not sheet_url:
@@ -1718,7 +1715,19 @@ def main():
         st.error(f"เปิดชีตไม่สำเร็จ: {e}"); return
     ensure_sheets_exist(sh)
 
-    auth_block(sh)
+    
+
+# === PATCH: Quick entry for Requests page (after sheets are ready) ===
+try:
+    if st.sidebar.button("🧺 คำขอเบิก"):
+        st.session_state["_route_requests"] = True
+except Exception:
+    pass
+if st.session_state.get("_route_requests"):
+    page_requests(sh)
+    return
+# === END PATCH ===
+auth_block(sh)
 
     if page.startswith("📊"): page_dashboard(sh)
     elif page.startswith("📦"): page_stock(sh)
@@ -1735,146 +1744,32 @@ if __name__ == "__main__":
     main()
 
 
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Requests Page Hotfix for iTao iT (Streamlit + Google Sheets)
-- Fixes AttributeError: "Can only use .str accessor with string values!"
-- Makes column handling robust (Status/Qty/Branch/OrderNo names)
-- Adds helpers to ensure Requests / Notifications sheets exist
-- Safe to paste into main app (replace existing functions/const) or import functions from here
-"""
+# === PATCH: Requests helpers & page (robust) ===
 import streamlit as st
 import pandas as pd
 from datetime import datetime
 import uuid
 
-# ---------- Constants (use these names in main app) ----------
-MENU_REQUESTS = "🧺 คำขอเบิก"
-REQUESTS_SHEET = "Requests"
-NOTIFS_SHEET = "Notifications"
-
-REQUESTS_HEADERS = [
-    "Branch","Requester","CreatedAt","OrderNo",
-    "ItemCode","ItemName","Qty",
-    "Status","Approver","LastUpdate","Note"
-]
-NOTIFS_HEADERS = [
-    "NotiID","CreatedAt","TargetApp","TargetBranch","Type","RefID","Message","ReadFlag","ReadAt"
-]
-
-# ---------- Utilities ----------
-def _lower_cols(df: pd.DataFrame):
-    return {c: str(c).strip().lower() for c in df.columns}
-
-def _col(df: pd.DataFrame, *candidates: str, default: str | None = None) -> str:
-    """
-    Resolve a column name by trying multiple candidates (case/space insensitive).
-    """
-    if df.empty:
-        # return the first candidate if df has no cols (won't be used but avoids crash)
-        return candidates[0]
-    mapping = {str(c).strip().lower(): c for c in df.columns}
-    for cand in candidates:
-        key = cand.strip().lower()
-        if key in mapping:
-            return mapping[key]
-        # allow thai/english common variations
-    # fallback
-    return mapping.get(default, default or candidates[0])
-
-def ensure_requests_notifs_sheets(sh)
-    # PATCH: Guaranteed sidebar entry & route for 'คำขอเบิก'
-    try:
-        if st.sidebar.button("🧺 คำขอเบิก"):
-            st.session_state["_route_requests"] = True
-    except Exception:
-        pass
-    if st.session_state.get("_route_requests"):
-        page_requests(sh)
-        return
-:
+def ensure_requests_notifs_sheets(sh):
     """Create Requests / Notifications with headers if missing."""
-    ws_names = [w.title for w in sh.worksheets()]
-    def _ensure(name: str, headers: list[str]):
-        if name not in ws_names:
+    try:
+        ws_names = [w.title for w in sh.worksheets()]
+    except Exception:
+        ws_names = []
+    def _ensure(name, headers):
+        if name in ws_names:
+            return
+        try:
             ws = sh.add_worksheet(name, rows=1000, cols=max(12, len(headers)+2))
-            try:
-                import gspread_dataframe as gd
-                gd.set_with_dataframe(ws, pd.DataFrame(columns=headers), include_index=False)
-            except Exception:
-                # fallback: write header row by update
-                ws.update("A1", [headers])
-
-    _ensure(REQUESTS_SHEET, REQUESTS_HEADERS)
-    _ensure(NOTIFS_SHEET, NOTIFS_HEADERS)
-
-def _normalize_requests_df(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame(columns=REQUESTS_HEADERS)
-
-    # normalize basic fields
-    # map typical variants to standard names
-    cols = {c.lower(): c for c in df.columns}
-    def getcol(*cands, default=None):
-        for c in cands:
-            if c.lower() in cols:
-                return cols[c.lower()]
-        return default if default in df.columns else cands[0]
-
-    # Create a copy and fill na
-    df = df.copy()
-    df = df.fillna("")
-    # normalize Status as UPPER string ('' for missing)
-    if "Status" in df.columns:
-        df["Status"] = (
-            df["Status"]
-            .astype(str)
-            .fillna("")
-            .map(lambda x: "" if x.strip().lower() in ("nan","none","null") else x)
-            .str.upper()
-            .str.strip()
-        )
-    else:
-        df["Status"] = ""
-
-    # normalize Qty numeric
-    qty_col = getcol("Qty","จำนวน","quantity","qty")
-    if qty_col in df.columns:
-        df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0).astype(int)
-        if qty_col != "Qty":
-            df["Qty"] = df[qty_col]
-
-    # standardize essential columns if alias exists
-    mapping = {
-        "Branch": ("Branch","สาขา","branchcode","branch_code"),
-        "Requester": ("Requester","ผู้ขอ","ขอโดย","requester_name"),
-        "CreatedAt": ("CreatedAt","created_at","วันเวลา","วันที่"),
-        "OrderNo": ("OrderNo","order_no","เลขที่คำขอ","orderid"),
-        "ItemCode": ("ItemCode","รหัส","item_code","code"),
-        "ItemName": ("ItemName","ชื่ออุปกรณ์","name","item_name"),
-        "Qty": ("Qty","จำนวน","qty"),
-        "Status": ("Status","สถานะ","status"),
-        "Approver": ("Approver","ผู้อนุมัติ","approved_by"),
-        "LastUpdate": ("LastUpdate","อัปเดตล่าสุด","updated_at"),
-        "Note": ("Note","หมายเหตุ","note"),
-    }
-    for std, cands in mapping.items():
-        if std not in df.columns:
-            for cand in cands:
-                if cand in df.columns:
-                    df[std] = df[cand]
-                    break
-        # ensure column exists
-        if std not in df.columns:
-            df[std] = ""
-
-    # keep only the standard order for writing back
-    df = df[REQUESTS_HEADERS]
-    return df
+        except Exception:
+            ws = sh.worksheet(name)
+        try:
+            import gspread_dataframe as gd
+            gd.set_with_dataframe(ws, pd.DataFrame(columns=headers), include_index=False)
+        except Exception:
+            ws.update("A1", [headers])
 
 def _write_df(ws, df: pd.DataFrame):
-    """Write dataframe keeping header first row."""
     try:
         import gspread_dataframe as gd
         gd.set_with_dataframe(ws, df, include_index=False)
@@ -1882,16 +1777,40 @@ def _write_df(ws, df: pd.DataFrame):
         ws.clear()
         ws.update("A1", [list(df.columns)] + df.astype(str).values.tolist())
 
+def _normalize_requests_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or len(df) == 0:
+        return pd.DataFrame(columns=REQUESTS_HEADERS)
+    df = pd.DataFrame(df).copy().fillna("")
+    # Status normalize
+    if "Status" in df.columns:
+        df["Status"] = (
+            df["Status"].astype(str)
+            .fillna("")
+            .map(lambda x: "" if str(x).strip().lower() in ("nan","none","null") else str(x))
+            .str.upper().str.strip()
+        )
+    else:
+        df["Status"] = ""
+    # Qty normalize
+    qty_col = "Qty" if "Qty" in df.columns else ("จำนวน" if "จำนวน" in df.columns else None)
+    if qty_col:
+        df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0).astype(int)
+        if qty_col != "Qty":
+            df["Qty"] = df[qty_col]
+    # Ensure all columns exist
+    for c in REQUESTS_HEADERS:
+        if c not in df.columns:
+            df[c] = ""
+    return df[REQUESTS_HEADERS]
+
 def _append_notifications(sh, rows_df: pd.DataFrame, message: str):
-    ws = sh.worksheet(NOTIFS_SHEET)
     try:
-        current = pd.DataFrame(ws.get_all_records())
+        ws = sh.worksheet(NOTIFS_SHEET)
+        cur = pd.DataFrame(ws.get_all_records())
     except Exception:
-        current = pd.DataFrame(columns=NOTIFS_HEADERS)
-
-    if current.empty:
-        current = pd.DataFrame(columns=NOTIFS_HEADERS)
-
+        cur = pd.DataFrame(columns=NOTIFS_HEADERS)
+    if cur.empty:
+        cur = pd.DataFrame(columns=NOTIFS_HEADERS)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     new = []
     for _, r in rows_df.iterrows():
@@ -1906,128 +1825,94 @@ def _append_notifications(sh, rows_df: pd.DataFrame, message: str):
             "ReadFlag": "",
             "ReadAt": ""
         })
-    current = pd.concat([current, pd.DataFrame(new)], ignore_index=True)
-    _write_df(ws, current)
-
-def page_requests(sh):
-    """Requests approval page (robust, NaN-safe)"""
-    ensure_requests_notifs_sheets(sh)
-
-    ws = sh.worksheet(REQUESTS_SHEET)
-    try:
-        raw = ws.get_all_records()
-    except Exception:
-        raw = []
-
-    df = pd.DataFrame(raw)
-    df = _normalize_requests_df(df)
-
-    st.header("🧺 คำขอเบิก (จากสาขา)")
-    if df.empty:
-        st.info("ยังไม่มีคำขอ")
-        return
-
-    # ---- SAFE filter for pending ----
-    status = df["Status"].astype(str).fillna("").str.upper().str.strip()
-    pending = df[(status=="") | (status=="PENDING")].copy()
-    if pending.empty:
-        st.success("ไม่มีคำขอที่รออนุมัติ")
-        return
-
-    # group by order
-    order_nos = pending["OrderNo"].astype(str).fillna("").unique().tolist()
-    sel = st.selectbox("เลือก OrderNo", order_nos, index=0 if order_nos else None)
-    this = pending[pending["OrderNo"].astype(str) == str(sel)].copy()
-
-    if this.empty:
-        st.info("ไม่พบรายการภายใต้ OrderNo ที่เลือก")
-        return
-
-    left,right = st.columns([2,1])
-    with left:
-        st.write(f"**สาขา:** {this['Branch'].iloc[0]}  |  **ผู้ขอ:** {this['Requester'].iloc[0]}  |  **จำนวนรายการ:** {len(this)}")
-        st.dataframe(this[["ItemCode","ItemName","Qty"]], use_container_width=True)
-    with right:
-        st.metric("รวมจำนวนเบิก", int(this["Qty"].sum()))
-
-    c1, c2 = st.columns(2)
-    if c1.button("✅ อนุมัติและตัดสต็อก", use_container_width=True):
-        _approve_request_and_cut_stock(sh, this)
-        _append_notifications(sh, this, "คำขอได้รับการอนุมัติแล้ว")
-        st.success("อนุมัติสำเร็จ")
-        st.experimental_rerun()
-
-    if c2.button("❌ ปฏิเสธ", use_container_width=True):
-        _update_requests_status(sh, this, "REJECTED")
-        _append_notifications(sh, this, "คำขอถูกปฏิเสธ")
-        st.warning("ปฏิเสธแล้ว")
-        st.experimental_rerun()
-
-def _call_adjust_stock_if_exists(sh, r):
-    # Try to reuse original stock issue function provided by main app
-    fn = st.session_state.get("_adjust_stock_func")
-    if fn:
-        try:
-            fn(sh, item_code=r["ItemCode"], qty=int(r["Qty"]), txn_type="OUT",
-               branch=r.get("Branch",""), actor=st.session_state.get("username","system"),
-               note=f"Request {r.get('OrderNo','')}")
-            return True
-        except Exception:
-            pass
-
-    # fallback: append minimal OUT txn row (Type/Datetime etc.)
-    try:
-        ws_txn = sh.worksheet("Transactions")
-        existing = pd.DataFrame(ws_txn.get_all_records())
-    except Exception:
-        existing = pd.DataFrame(columns=["TxnID","วันเวลา","ประเภท","รหัส","ชื่ออุปกรณ์","สาขา","จำนวน","ผู้ดำเนินการ","หมายเหตุ"])
-    if existing.empty:
-        existing = pd.DataFrame(columns=["TxnID","วันเวลา","ประเภท","รหัส","ชื่ออุปกรณ์","สาขา","จำนวน","ผู้ดำเนินการ","หมายเหตุ"])
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    new_row = {
-        "TxnID": str(uuid.uuid4())[:8],
-        "วันเวลา": now,
-        "ประเภท": "OUT",
-        "รหัส": r.get("ItemCode",""),
-        "ชื่ออุปกรณ์": r.get("ItemName",""),
-        "สาขา": r.get("Branch",""),
-        "จำนวน": int(r.get("Qty",0)),
-        "ผู้ดำเนินการ": st.session_state.get("username","system"),
-        "หมายเหตุ": f"Request {r.get('OrderNo','')}"
-    }
-    existing = pd.concat([existing, pd.DataFrame([new_row])], ignore_index=True)
-    _write_df(ws_txn, existing)
-    return True
-
-def _approve_request_and_cut_stock(sh, rows_df: pd.DataFrame):
-    # reuse stock adjust if main app provided it in session_state
-    for _, r in rows_df.iterrows():
-        _call_adjust_stock_if_exists(sh, r)
-    _update_requests_status(sh, rows_df, "FULFILLED")
+    _write_df(ws, pd.concat([cur, pd.DataFrame(new)], ignore_index=True))
 
 def _update_requests_status(sh, rows_df: pd.DataFrame, new_status: str):
     ws = sh.worksheet(REQUESTS_SHEET)
     try:
-        df = pd.DataFrame(ws.get_all_records())
+        cur = pd.DataFrame(ws.get_all_records())
     except Exception:
-        df = pd.DataFrame(columns=REQUESTS_HEADERS)
-
-    df = _normalize_requests_df(df)
-
+        cur = pd.DataFrame(columns=REQUESTS_HEADERS)
+    cur = _normalize_requests_df(cur)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    approver = st.session_state.get("user", st.session_state.get("username","system"))
     for _, r in rows_df.iterrows():
-        mask = (df["OrderNo"].astype(str) == str(r.get("OrderNo",""))) &                (df["ItemCode"].astype(str) == str(r.get("ItemCode","")))
-        df.loc[mask, "Status"] = new_status
-        df.loc[mask, "Approver"] = st.session_state.get("username","system")
-        df.loc[mask, "LastUpdate"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        mask = (cur["OrderNo"].astype(str)==str(r.get("OrderNo",""))) &                (cur["ItemCode"].astype(str)==str(r.get("ItemCode","")))
+        cur.loc[mask, "Status"] = new_status
+        cur.loc[mask, "Approver"] = approver
+        cur.loc[mask, "LastUpdate"] = now
+    _write_df(ws, cur)
 
-    _write_df(ws, df)
+def _call_adjust_or_fallback(sh, r: pd.Series):
+    # Try existing adjust_stock-like function in globals (project-specific)
+    # We try common names used in similar apps
+    for name in ("adjust_stock", "record_transaction_and_update_stock", "issue_out_single"):
+        fn = globals().get(name)
+        if fn:
+            try:
+                fn(sh, item_code=r.get("ItemCode",""), qty=int(r.get("Qty",0)), txn_type="OUT",
+                   branch=r.get("Branch",""), actor=st.session_state.get("user","system"),
+                   note=f"Request {r.get('OrderNo','')}")
+                return True
+            except Exception:
+                pass
+    # Fallback: append minimal OUT row to Transactions (does not change Items balance)
+    try:
+        ws = sh.worksheet("Transactions")
+        cur = pd.DataFrame(ws.get_all_records())
+    except Exception:
+        cur = pd.DataFrame(columns=["TxnID","วันเวลา","ประเภท","รหัส","ชื่ออุปกรณ์","สาขา","จำนวน","ผู้ดำเนินการ","หมายเหตุ"])
+    if cur.empty:
+        cur = pd.DataFrame(columns=["TxnID","วันเวลา","ประเภท","รหัส","ชื่ออุปกรณ์","สาขา","จำนวน","ผู้ดำเนินการ","หมายเหตุ"])
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    row = {
+        "TxnID": str(uuid.uuid4())[:8],
+        "วันเวลา": now, "ประเภท": "OUT",
+        "รหัส": r.get("ItemCode",""), "ชื่ออุปกรณ์": r.get("ItemName",""),
+        "สาขา": r.get("Branch",""), "จำนวน": int(r.get("Qty",0)),
+        "ผู้ดำเนินการ": st.session_state.get("user","system"),
+        "หมายเหตุ": f"Request {r.get('OrderNo','')}"
+    }
+    _write_df(ws, pd.concat([cur, pd.DataFrame([row])], ignore_index=True))
+    return True
 
+def page_requests(sh):
+    """Requests approval page."""
+    ensure_requests_notifs_sheets(sh)
+    try:
+        ws = sh.worksheet(REQUESTS_SHEET)
+        raw = ws.get_all_records()
+    except Exception:
+        raw = []
+    df = _normalize_requests_df(pd.DataFrame(raw))
+    st.header("🧺 คำขอเบิก (จากสาขา)")
+    if df.empty:
+        st.info("ยังไม่มีคำขอ"); return
+    status = df["Status"].astype(str).fillna("").str.upper().str.strip()
+    pending = df[(status=="") | (status=="PENDING")].copy()
+    if pending.empty:
+        st.success("ไม่มีคำขอที่รออนุมัติ"); return
+    orders = pending["OrderNo"].astype(str).unique().tolist()
+    sel = st.selectbox("เลือก OrderNo", orders, index=0 if orders else None)
+    cur = pending[pending["OrderNo"].astype(str)==str(sel)].copy()
+    if cur.empty:
+        st.info("ไม่พบรายการภายใต้ OrderNo ที่เลือก"); return
+    c1,c2 = st.columns([2,1])
+    with c1:
+        st.write(f"**สาขา:** {cur['Branch'].iloc[0]}  |  **ผู้ขอ:** {cur['Requester'].iloc[0]}  |  **จำนวนรายการ:** {len(cur)}")
+        st.dataframe(cur[["ItemCode","ItemName","Qty"]], use_container_width=True, height=280)
+    with c2:
+        st.metric("รวมจำนวนเบิก", int(cur["Qty"].sum()))
+    b1,b2 = st.columns(2)
+    if b1.button("✅ อนุมัติและตัดสต็อก", use_container_width=True):
+        for _, r in cur.iterrows():
+            _call_adjust_or_fallback(sh, r)
+        _update_requests_status(sh, cur, "FULFILLED")
+        _append_notifications(sh, cur, "คำขอได้รับการอนุมัติแล้ว")
+        st.success("อนุมัติสำเร็จ"); st.experimental_rerun()
+    if b2.button("❌ ปฏิเสธ", use_container_width=True):
+        _update_requests_status(sh, cur, "REJECTED")
+        _append_notifications(sh, cur, "คำขอถูกปฏิเสธ")
+        st.warning("ปฏิเสธแล้ว"); st.experimental_rerun()
+# === END PATCH ===
 
-
-# PATCH: Fallback menu insertion if radio not matched
-try:
-    if 'page' in globals():
-        if st.sidebar.button("🧺 คำขอเบิก"):
-            page = "🧺 คำขอเบิก"
-except Exception:
-    pass
