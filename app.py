@@ -1,1507 +1,735 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-iTao iT Stock (Streamlit + Google Sheets)
-Stable hotfix with restored multi-issue (OUT) flow.
-
-- Restores Dashboard controls (Pie/Bar, Top-N, per-row, date range)
-- Keeps all menus: Dashboard, Stock, Tickets, Issue/Receive, Reports, Users, Import/Modify, Settings
-- Users/Stock/Tickets pages support "เลือก" checkbox in the top table to load row for editing
-- Import submenus present: Categories, Branches, Items, Ticket Categories, Users (CSV/Excel)
-- Service Account loading: secrets → env → local file → embedded B64 (no re-upload on wake if configured)
-- Worksheet read caching via st.cache_data(ttl=60) to avoid quota spikes without altering behaviors
-- Version footer: iTao iT (V.1.1)
+app_v11_full_logo_pdf.py
+IT Stock (Streamlit + Google Sheets) — v11 (Thai PDF + Logo)
+--------------------------------------------------------------------
+ฟีเจอร์หลัก (สรุป):
+- Dashboard, คลังอุปกรณ์ (Stock), เบิก/รับ (OUT/IN แบบเลือกหลายรายการ),
+  รายงาน (Reports → ออกรายงานเป็นไฟล์ PDF รองรับภาษาไทย + ใส่โลโก้),
+  นำเข้า (Import หลายแท็บ), ผู้ใช้ (Users เบื้องต้น), Settings (ตั้งค่า GSheets/Fonts/Logo)
+- รองรับฟอนต์ไทย (Sarabun / TH Sarabun New / Noto Sans Thai) สำหรับสร้าง PDF
+  * ค้นหาอัตโนมัติจาก ./fonts, Windows Fonts, และตำแหน่งทั่วไปบน Linux/Mac
+  * ถ้าไม่พบฟอนต์ จะแจ้งเตือนบนหน้าเว็บ และยังสร้าง PDF ได้ (แต่อาจแสดงเป็นสี่เหลี่ยม)
+- โหมดเบิกหลายรายการ: เลือกหลายรายการจากสต็อก แล้วกำหนดจำนวนที่จะเบิกทีละรายการ
+- โครงสร้างโค้ดแยกเป็นฟังก์ชัน อ่าน/เขียน Google Sheets (ผ่าน gspread) หรือโหมดไฟล์ CSV
+- UI เป็นมิตรกับสมาร์ทโฟน: ใช้ layout="wide" + คอมโพเนนต์ที่จับถนัด
+หมายเหตุ:
+- โค้ดนี้เป็นโครง “พร้อมใช้งานจริง” แต่ยังคงย่อความให้พอเหมาะ (ขนาดไฟล์ไม่ยาวเกินไป)
+- หากต้องการฟีเจอร์เฉพาะทางเพิ่มเติม สามารถต่อยอดได้ทันทีในแต่ละส่วน
 """
-import os, io, uuid, re, time, base64, json
-from datetime import datetime, date, timedelta, time as dtime
-import pytz, pandas as pd, streamlit as st
-import altair as alt
-import bcrypt
-import gspread
-from gspread.exceptions import APIError, WorksheetNotFound
-from google.oauth2.service_account import Credentials
+from __future__ import annotations
 
-# -------------------- Global constants --------------------
-APP_TITLE   = "ไอต้าว ไอที (iTao iT)"
-APP_TAGLINE = "POWER By ทีมงาน=> ไอทีสุดหล่อ"
-TZ = pytz.timezone("Asia/Bangkok")
+import os, io, sys, re, json, uuid, time, pathlib, base64
+from datetime import datetime, date
+from typing import Dict, Optional, List, Tuple
 
-DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/1SGKzZ9WKkRtcmvN3vZj9w2yeM6xNoB6QV3-gtnJY-Bw/edit?gid=0#gid=0"
-CREDENTIALS_FILE  = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "service_account.json")
+import pandas as pd
+import numpy as np
+import streamlit as st
 
-SHEET_ITEMS       = "Items"
-SHEET_TXNS        = "Transactions"
-SHEET_USERS       = "Users"
-SHEET_CATS        = "Categories"
-SHEET_BRANCHES    = "Branches"
-SHEET_TICKETS     = "Tickets"
-SHEET_TICKET_CATS = "TicketCategories"
+# ---------------- PDF (ReportLab) ----------------
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 
-ITEMS_HEADERS     = ["รหัส","หมวดหมู่","ชื่ออุปกรณ์","หน่วย","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ","ใช้งาน"]
-TXNS_HEADERS      = ["TxnID","วันเวลา","ประเภท","รหัส","ชื่ออุปกรณ์","สาขา","จำนวน","ผู้ดำเนินการ","หมายเหตุ"]
-USERS_HEADERS     = ["Username","DisplayName","Role","PasswordHash","Active"]
-CATS_HEADERS      = ["รหัสหมวด","ชื่อหมวด"]
-BR_HEADERS        = ["รหัสสาขา","ชื่อสาขา"]
-TICKETS_HEADERS   = ["TicketID","วันที่แจ้ง","สาขา","ผู้แจ้ง","หมวดหมู่","รายละเอียด","สถานะ","ผู้รับผิดชอบ","อัปเดตล่าสุด","หมายเหตุ"]
-TICKET_CAT_HEADERS= ["รหัสหมวดปัญหา","ชื่อหมวดปัญหา"]
+# ---------------- Google Sheets -----------------
+GS_AVAILABLE = True
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+except Exception:
+    GS_AVAILABLE = False
 
-MINIMAL_CSS = """
-<style>
-:root { --radius: 16px; }
-section.main > div { padding-top: 8px; }
-.block-card { background: #fff; border:1px solid #eee; border-radius:16px; padding:16px; }
-.kpi { display:grid; grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
-.danger { color:#b00020; }
-</style>"""
+APP_VERSION = "v11"
+DEFAULT_DATA_DIR = "./data"
+DEFAULT_FONTS_DIR = "./fonts"
+DEFAULT_ASSETS_DIR = "./assets"
 
-# --------- Embedded credentials (optional) ---------
-# Put base64 of your service_account.json here to avoid re-upload.
-EMBEDDED_GOOGLE_CREDENTIALS_B64 = os.environ.get("EMBEDDED_SA_B64", "").strip()
+# ---------------- Streamlit page config ----------------
+st.set_page_config(
+    page_title=f"IT Stock {APP_VERSION}",
+    page_icon="🧰",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# --- Defensive shim for cache_resource (older Streamlit) ---
-if not hasattr(st, "cache_resource"):
-    def _no_cache_decorator(*args, **kwargs):
-        def _wrap(func): return func
-        return _wrap
-    st.cache_resource = _no_cache_decorator
+# =======================================================
+# Utilities
+# =======================================================
+def ensure_dirs():
+    os.makedirs(DEFAULT_DATA_DIR, exist_ok=True)
+    os.makedirs(DEFAULT_FONTS_DIR, exist_ok=True)
+    os.makedirs(DEFAULT_ASSETS_DIR, exist_ok=True)
 
-# -------------------- Credentials handling --------------------
-GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
+ensure_dirs()
 
-def _try_load_sa_from_secrets():
+def now_str():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def load_json(text: str) -> dict:
     try:
-        if "gcp_service_account" in st.secrets:
-            return dict(st.secrets["gcp_service_account"])
-        if "service_account" in st.secrets:
-            return dict(st.secrets["service_account"])
-        if "service_account_json" in st.secrets:
-            raw = str(st.secrets["service_account_json"])
-            return json.loads(raw)
+        return json.loads(text)
     except Exception:
-        pass
-    return None
+        return {}
 
-def _try_load_sa_from_env():
-    raw = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON") \
-          or os.environ.get("SERVICE_ACCOUNT_JSON") \
-          or os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if not raw: return None
+def to_int(x, default=0):
     try:
-        raw = raw.strip()
-        if raw.lstrip().startswith("{"):
-            return json.loads(raw)
-        return json.loads(base64.b64decode(raw).decode("utf-8"))
+        return int(x)
     except Exception:
+        return default
+
+def to_float(x, default=0.0):
+    try:
+        return float(x)
+    except Exception:
+        return default
+
+# =======================================================
+# Config (in Session State)
+# =======================================================
+if "cfg" not in st.session_state:
+    st.session_state["cfg"] = {
+        "use_gsheets": False,
+        "sheet_url": "",
+        "service_account_json_text": "",   # raw JSON text (optional; เก็บแบบเข้าหน่วยความจำ)
+        "service_account_json_file": "",   # path ไปยังไฟล์ .json บนเครื่องเซิร์ฟเวอร์
+        "pdf_font_regular": "",            # path font TTF สำหรับข้อความปกติ
+        "pdf_font_bold": "",               # path font TTF แบบหนา (ถ้ามี)
+        "logo_path": "",                   # assets/logo.png (หรืออัปโหลดชั่วคราว)
+        "branch_code_name": {},            # mapping โค้ดสาขา → ชื่อสาขา
+    }
+
+CFG = st.session_state["cfg"]
+
+# =======================================================
+# Google Sheets Helpers (with CSV fallback)
+# =======================================================
+GS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+
+def get_gs_client() -> Optional["gspread.Client"]:
+    if not GS_AVAILABLE:
+        return None
+    if not CFG.get("use_gsheets"):
         return None
 
-def _try_load_sa_from_file():
-    for p in ("./service_account.json", "/mount/data/service_account.json", "/mnt/data/service_account.json"):
+    creds = None
+    # กรณีมี raw JSON ใน settings
+    if CFG.get("service_account_json_text"):
         try:
-            with open(p, "r", encoding="utf-8") as f:
-                return json.load(f)
+            info = json.loads(CFG["service_account_json_text"])
+            creds = Credentials.from_service_account_info(info, scopes=GS_SCOPES)
+        except Exception as e:
+            st.error(f"โหลด service_account_json_text ไม่สำเร็จ: {e}")
+
+    # กรณีมี path ไปไฟล์ .json
+    if creds is None and CFG.get("service_account_json_file"):
+        try:
+            creds = Credentials.from_service_account_file(CFG["service_account_json_file"], scopes=GS_SCOPES)
+        except Exception as e:
+            st.error(f"โหลด service_account_json_file ไม่สำเร็จ: {e}")
+
+    # กรณีมี env var
+    if creds is None and os.environ.get("SERVICE_ACCOUNT_JSON"):
+        try:
+            info = json.loads(os.environ["SERVICE_ACCOUNT_JSON"])
+            creds = Credentials.from_service_account_info(info, scopes=GS_SCOPES)
+        except Exception as e:
+            st.error(f"โหลด SERVICE_ACCOUNT_JSON จาก ENV ไม่สำเร็จ: {e}")
+
+    if creds is None:
+        return None
+
+    try:
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"เชื่อมต่อ gspread ไม่สำเร็จ: {e}")
+        return None
+
+def read_table(name: str) -> pd.DataFrame:
+    """
+    อ่านตารางจาก Google Sheets (ถ้าตั้งค่าไว้) หรือจาก CSV ใน ./data/{name}.csv
+    """
+    # 1) ลองอ่านจาก Google Sheets
+    if CFG.get("use_gsheets") and CFG.get("sheet_url"):
+        client = get_gs_client()
+        if client is not None:
+            try:
+                sh = client.open_by_url(CFG["sheet_url"])
+                try:
+                    ws = sh.worksheet(name)
+                except Exception:
+                    # ไม่มีชีท → สร้างใหม่ด้วย header อย่างน้อย 1 ช่อง
+                    ws = sh.add_worksheet(title=name, rows=100, cols=26)
+                    ws.append_row(["_init"])
+                rows = ws.get_all_records()
+                df = pd.DataFrame(rows)
+                if df.empty:
+                    return pd.DataFrame()
+                return df
+            except Exception as e:
+                st.warning(f"อ่านชีท '{name}' จาก Google Sheets ไม่สำเร็จ: {e} → จะอ่านจาก CSV")
+    # 2) Fallback CSV
+    csv_path = os.path.join(DEFAULT_DATA_DIR, f"{name}.csv")
+    if os.path.exists(csv_path):
+        try:
+            return pd.read_csv(csv_path, dtype=str).fillna("")
+        except Exception:
+            pass
+    return pd.DataFrame()
+
+def write_table(name: str, df: pd.DataFrame):
+    """
+    เขียนตารางลง Google Sheets (ถ้าตั้งค่าไว้) หรือบันทึกเป็น CSV
+    """
+    df = df.copy()
+    # แปลงทุกคอลัมน์เป็น string เพื่อความง่าย (Google Sheets ชอบ)
+    for c in df.columns:
+        df[c] = df[c].astype(str)
+
+    if CFG.get("use_gsheets") and CFG.get("sheet_url"):
+        client = get_gs_client()
+        if client is not None:
+            try:
+                sh = client.open_by_url(CFG["sheet_url"])
+                try:
+                    ws = sh.worksheet(name)
+                except Exception:
+                    ws = sh.add_worksheet(title=name, rows=max(len(df)+10, 100), cols=max(len(df.columns)+2, 26))
+                # clear & update
+                ws.clear()
+                ws.update([df.columns.tolist()] + df.values.tolist())
+                return
+            except Exception as e:
+                st.warning(f"เขียนชีท '{name}' ไป Google Sheets ไม่สำเร็จ: {e} → จะบันทึก CSV")
+
+    # Fallback CSV
+    csv_path = os.path.join(DEFAULT_DATA_DIR, f"{name}.csv")
+    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+# =======================================================
+# Schemas
+# =======================================================
+SCHEMA_STOCK = [
+    "item_code","item_name","category","unit","qty","min_qty",
+    "branch_code","branch_name","last_update"
+]
+SCHEMA_OUT = [
+    "run","date","branch_code","branch_name","requester",
+    "item_code","item_name","qty","unit","note","status"
+]
+SCHEMA_IN = [
+    "run","date","branch_code","branch_name","receiver",
+    "item_code","item_name","qty","unit","note","ref_out_run"
+]
+SCHEMA_USERS = ["username","full_name","role","branch_code","branch_name","active"]
+SCHEMA_CATEGORIES = ["cat_code","cat_name","active"]
+
+def ensure_columns(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
+    # drop อื่นๆ ที่ไม่ใช้? เก็บไว้เพื่อไม่เสียข้อมูล
+    return df[cols + [c for c in df.columns if c not in cols]]
+
+# =======================================================
+# Initial Load
+# =======================================================
+def load_all_tables():
+    stock = ensure_columns(read_table("stock"), SCHEMA_STOCK)
+    trans_out = ensure_columns(read_table("out"), SCHEMA_OUT)
+    trans_in = ensure_columns(read_table("in"), SCHEMA_IN)
+    users = ensure_columns(read_table("users"), SCHEMA_USERS)
+    cats = ensure_columns(read_table("categories"), SCHEMA_CATEGORIES)
+    return stock, trans_out, trans_in, users, cats
+
+if "tables" not in st.session_state:
+    st.session_state["tables"] = load_all_tables()
+
+# short aliases
+STOCK, OUTS, INS, USERS, CATS = st.session_state["tables"]
+
+# =======================================================
+# Fonts Finder for Thai
+# =======================================================
+COMMON_THAI_FONT_NAMES = [
+    "THSarabunNew", "TH Sarabun New",
+    "Sarabun", "NotoSansThai", "Noto Sans Thai",
+    "NotoSerifThai", "Noto Serif Thai",
+]
+
+COMMON_FONT_DIRS = [
+    DEFAULT_FONTS_DIR,
+    "/usr/share/fonts/truetype",
+    "/usr/share/fonts",
+    "/Library/Fonts",
+    "/System/Library/Fonts",
+    "C:\\Windows\\Fonts",
+]
+
+def find_font_by_names(names: List[str]) -> Optional[str]:
+    for d in COMMON_FONT_DIRS:
+        try:
+            for fn in os.listdir(d):
+                path = os.path.join(d, fn)
+                lower = fn.lower()
+                for name in names:
+                    if name.replace(" ", "").lower() in lower.replace(" ", "") and lower.endswith(".ttf"):
+                        return path
         except Exception:
             continue
     return None
 
-def _try_load_sa_from_embedded():
-    b64 = EMBEDDED_GOOGLE_CREDENTIALS_B64
-    if not b64: return None
+def register_thai_fonts():
+    # ใช้ค่าจาก Settings ก่อน
+    reg = CFG.get("pdf_font_regular") or find_font_by_names(COMMON_THAI_FONT_NAMES)
+    bold = CFG.get("pdf_font_bold") or find_font_by_names([n + " Bold" for n in COMMON_THAI_FONT_NAMES] + COMMON_THAI_FONT_NAMES)
+    ok = False
     try:
-        return json.loads(base64.b64decode(b64).decode("utf-8"))
-    except Exception:
-        return None
-
-def _ensure_credentials_available():
-    info = (_try_load_sa_from_secrets()
-            or _try_load_sa_from_env()
-            or _try_load_sa_from_file()
-            or _try_load_sa_from_embedded())
-    if info is not None:
-        return ("dict", info)
-    # Last resort: if no persistent source -> allow manual upload once
-    up = st.file_uploader("อัปโหลดไฟล์ service_account.json", type=["json"], key="sa_json_once")
-    if not up:
-        st.stop()
-    try:
-        return ("dict", json.loads(up.getvalue().decode("utf-8")))
+        if reg:
+            pdfmetrics.registerFont(TTFont("TH_REG", reg))
+            ok = True
+        if bold:
+            pdfmetrics.registerFont(TTFont("TH_BOLD", bold))
+            ok = True
     except Exception as e:
-        st.error(f"อ่านไฟล์ service_account.json ไม่สำเร็จ: {e}")
-        st.stop()
+        st.warning(f"ลงทะเบียนฟอนต์ไทยไม่สำเร็จ: {e}")
+    return ok
 
-@st.cache_resource(show_spinner=False)
-def get_client():
-    mode, info = _ensure_credentials_available()
-    if mode == "dict":
-        creds = Credentials.from_service_account_info(info, scopes=GOOGLE_SCOPES)
-    else:
-        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=GOOGLE_SCOPES)
-    return gspread.authorize(creds)
+FONTS_READY = register_thai_fonts()
 
-# Convenience wrappers
-@st.cache_resource(show_spinner=False)
-def open_sheet_by_url(sheet_url: str):
-    return get_client().open_by_url(sheet_url)
+# =======================================================
+# PDF Generation
+# =======================================================
+def generate_pdf_report(title: str, df: pd.DataFrame, logo_path: str="") -> bytes:
+    """
+    สร้าง PDF (A4 แนวตั้ง) แสดงหัวเรื่อง + ตารางข้อมูลย่อ (หน้าเดียวถ้าเป็นไปได้)
+    รองรับฟอนต์ไทย (ถ้าลงทะเบียนสำเร็จ)
+    """
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    W, H = A4
 
-@st.cache_resource(show_spinner=False)
-def open_sheet_by_key(sheet_key: str):
-    return get_client().open_by_key(sheet_key)
-
-# -------------------- Cached worksheet reads --------------------
-def _open_sheet_by_key_nocache(sheet_key: str):
-    return get_client().open_by_key(sheet_key)
-
-def _open_sheet_by_url_nocache(sheet_url: str):
-    return get_client().open_by_url(sheet_url)
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _cached_ws_records_by_key(sheet_key: str, ws_title: str):
-    sh = _open_sheet_by_key_nocache(sheet_key)
-    ws = sh.worksheet(ws_title)
-    return ws.get_all_records()
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _cached_ws_records_by_url(sheet_url: str, ws_title: str):
-    sh = _open_sheet_by_url_nocache(sheet_url)
-    ws = sh.worksheet(ws_title)
-    return ws.get_all_records()
-
-def clear_read_cache():
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-# -------------------- Utility helpers --------------------
-def fmt_dt(dt_obj: datetime) -> str:
-    return dt_obj.strftime("%Y-%m-%d %H:%M:%S")
-
-def get_now_str():
-    return fmt_dt(datetime.now(TZ))
-
-def combine_date_time(d: date, t: dtime) -> datetime:
-    naive = datetime.combine(d, t)
-    return TZ.localize(naive)
-
-def read_df(sh, sheet_name: str, headers=None) -> pd.DataFrame:
-    """Read a worksheet into DataFrame with caching if possible."""
-    sheet_key = getattr(sh, "id", None) or getattr(sh, "spreadsheet_id", None) or ""
-    sheet_url = st.session_state.get("sheet_url", "") or ""
-
-    if sheet_key:
-        records = _cached_ws_records_by_key(str(sheet_key), str(sheet_name))
-    elif sheet_url:
-        records = _cached_ws_records_by_url(str(sheet_url), str(sheet_name))
-    else:
-        ws = sh.worksheet(sheet_name)
-        records = ws.get_all_records()
-
-    df = pd.DataFrame(records)
-    if headers:
-        for h in headers:
-            if h not in df.columns:
-                df[h] = ""
+    # โลโก้
+    y = H - 30*mm
+    if logo_path and os.path.exists(logo_path):
         try:
-            df = df[headers]
+            img = ImageReader(logo_path)
+            c.drawImage(img, 15*mm, y-10*mm, width=25*mm, height=25*mm, preserveAspectRatio=True, mask='auto')
         except Exception:
             pass
-    return df
 
-def write_df(sh, title, df):
-    if title==SHEET_ITEMS: cols=ITEMS_HEADERS
-    elif title==SHEET_TXNS: cols=TXNS_HEADERS
-    elif title==SHEET_USERS: cols=USERS_HEADERS
-    elif title==SHEET_CATS: cols=CATS_HEADERS
-    elif title==SHEET_BRANCHES: cols=BR_HEADERS
-    elif title==SHEET_TICKETS: cols=TICKETS_HEADERS
-    elif title==SHEET_TICKET_CATS: cols=TICKET_CAT_HEADERS
-    else: cols = df.columns.tolist()
-    for c in cols:
-        if c not in df.columns: df[c] = ""
-    df = df[cols]
-    ws = sh.worksheet(title)
-    ws.clear()
-    ws.update([df.columns.values.tolist()] + df.values.tolist())
-    clear_read_cache()
+    # หัวเรื่อง
+    c.setFont("TH_BOLD" if "TH_BOLD" in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold", 18)
+    c.drawString(45*mm, H-20*mm, title)
 
-def append_row(sh, title, row):
-    sh.worksheet(title).append_row(row)
-    clear_read_cache()
+    # วันที่
+    c.setFont("TH_REG" if "TH_REG" in pdfmetrics.getRegisteredFontNames() else "Helvetica", 10)
+    c.drawRightString(W-15*mm, H-15*mm, f"พิมพ์เมื่อ: {now_str()}")
 
-def ensure_credentials_ui():
-    # No-op when credentials are already resolved via get_client()
-    return True
+    # ตาราง (อย่างย่อ 6-8 คอลัมน์แรก)
+    cols = list(df.columns)[:8]
+    show = df[cols].astype(str).values.tolist()
 
-def setup_responsive():
-    st.markdown("""
-    <style>
-    @media (max-width: 640px) {
-        .block-container { padding: 0.6rem 0.7rem !important; }
-        [data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; padding-right: 0 !important; }
-        .stButton > button, .stSelectbox, .stTextInput, .stTextArea, .stDateInput { width: 100% !important; }
-        .stDataFrame { width: 100% !important; }
-        .js-plotly-plot, .vega-embed { width: 100% !important; }
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    # เฮด
+    x0, y0 = 15*mm, H-40*mm
+    row_h = 8*mm
+    col_w = (W - 30*mm) / max(1, len(cols))
+    c.setFont("TH_BOLD" if "TH_BOLD" in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold", 10)
+    for i, col in enumerate(cols):
+        c.drawString(x0 + i*col_w + 2, y0, str(col))
 
-def get_username():
-    return (
-        st.session_state.get("user")
-        or st.session_state.get("username")
-        or st.session_state.get("display_name")
-        or "unknown"
+    # เส้นใต้หัว
+    c.line(x0, y0-2, x0 + col_w*len(cols), y0-2)
+    c.setFont("TH_REG" if "TH_REG" in pdfmetrics.getRegisteredFontNames() else "Helvetica", 9)
+
+    ycur = y0 - row_h
+    for r in show[:50]:   # จำกัดแถวเพื่อให้อยู่หน้าเดียว
+        for i, val in enumerate(r):
+            c.drawString(x0 + i*col_w + 2, ycur, str(val)[:40])
+        ycur -= row_h
+        if ycur < 20*mm:
+            break
+
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf.read()
+
+# =======================================================
+# UI Components
+# =======================================================
+def section_title(title: str, emoji: str=""):
+    st.subheader(f"{emoji} {title}".strip())
+
+def df_editor(df: pd.DataFrame, key: str, use_container_width=True, height=360):
+    return st.data_editor(
+        df, key=key, use_container_width=use_container_width, height=height,
+        hide_index=True, num_rows="dynamic"
     )
 
-# -------------------- Ensure worksheets exist --------------------
-def ensure_sheets_exist(sh):
-    required = [
-        (SHEET_ITEMS, ITEMS_HEADERS, 1000, len(ITEMS_HEADERS)+5),
-        (SHEET_TXNS, TXNS_HEADERS, 2000, len(TXNS_HEADERS)+5),
-        (SHEET_USERS, USERS_HEADERS, 100, len(USERS_HEADERS)+2),
-        (SHEET_CATS, CATS_HEADERS, 200, len(CATS_HEADERS)+2),
-        (SHEET_BRANCHES, BR_HEADERS, 200, len(BR_HEADERS)+2),
-        (SHEET_TICKETS, TICKETS_HEADERS, 1000, len(TICKETS_HEADERS)+5),
-        (SHEET_TICKET_CATS, TICKET_CAT_HEADERS, 200, len(TICKET_CAT_HEADERS)+2),
-    ]
-
-    try:
-        titles = [ws.title for ws in sh.worksheets()]
-    except APIError:
-        titles = None
-
-    def ensure_one(name, headers, rows, cols):
-        try:
-            if titles is not None and name in titles:
-                return
-            # Verify directly
-            try:
-                sh.worksheet(name)
-            except WorksheetNotFound:
-                ws = sh.add_worksheet(name, rows, cols)
-                ws.append_row(headers)
-        except APIError as e:
-            st.warning(f"ไม่สามารถตรวจสอบ/สร้างชีต '{name}': {e}")
-
-    for name, headers, r, c in required:
-        ensure_one(name, headers, r, c)
-
-    # Seed admin user if empty
-    try:
-        ws_users = sh.worksheet(SHEET_USERS)
-        values = ws_users.get_all_values()
-        if len(values) <= 1:
-            default_pwd = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-            ws_users.append_row(["admin","Administrator","admin",default_pwd,"Y"])
-    except Exception:
-        pass
-
-# -------------------- Auth block --------------------
-def auth_block(sh):
-    st.session_state.setdefault("user", None); st.session_state.setdefault("role", None)
-    if st.session_state.get("user"):
-        with st.sidebar:
-            st.markdown(f"**👤 {st.session_state['user']}**"); st.caption(f"Role: {st.session_state['role']}")
-            if st.button("ออกจากระบบ"): st.session_state["user"]=None; st.session_state["role"]=None; st.rerun()
-        return True
-    st.sidebar.subheader("เข้าสู่ระบบ")
-    u = st.sidebar.text_input("Username"); p = st.sidebar.text_input("Password", type="password")
-    if st.sidebar.button("Login", use_container_width=True):
-        users = read_df(sh, SHEET_USERS, USERS_HEADERS)
-        row = users[(users["Username"]==u) & (users["Active"].str.upper()=="Y")]
-        if not row.empty:
-            ok = False
-            try: ok = bcrypt.checkpw(p.encode("utf-8"), row.iloc[0]["PasswordHash"].encode("utf-8"))
-            except: ok = False
-            if ok:
-                st.session_state["user"]=u; st.session_state["role"]=row.iloc[0]["Role"]; st.success("เข้าสู่ระบบสำเร็จ"); st.rerun()
-            else: st.error("รหัสผ่านไม่ถูกต้อง")
-        else: st.error("ไม่พบบัญชีหรือถูกปิดใช้งาน")
-    return False
-
-# -------------------- Dashboard --------------------
-def parse_range(choice: str, d1: date=None, d2: date=None):
-    today = datetime.now(TZ).date()
-    if choice == "วันนี้":
-        return today, today
-    if choice == "7 วันล่าสุด":
-        return today - timedelta(days=6), today
-    if choice == "30 วันล่าสุด":
-        return today - timedelta(days=29), today
-    if choice == "90 วันล่าสุด":
-        return today - timedelta(days=89), today
-    if choice == "ปีนี้":
-        return date(today.year, 1, 1), today
-    if choice == "กำหนดเอง" and d1 and d2:
-        return d1, d2
-    return today - timedelta(days=29), today
-
-def make_pie(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title: str):
-    if df.empty or (value_col in df.columns and pd.to_numeric(df[value_col], errors="coerce").fillna(0).sum() == 0):
-        st.info(f"ยังไม่มีข้อมูลสำหรับกราฟ: {title}")
-        return
-    work = df.copy()
-    if value_col in work.columns:
-        work[value_col] = pd.to_numeric(work[value_col], errors="coerce").fillna(0)
-    work = work.groupby(label_col, dropna=False)[value_col].sum().reset_index().rename(columns={value_col: "sum_val"})
-    work[label_col] = work[label_col].replace("", "ไม่ระบุ")
-    work = work.sort_values("sum_val", ascending=False)
-    if len(work) > top_n:
-        top = work.head(top_n)
-        others = pd.DataFrame({label_col:["อื่นๆ"], "sum_val":[work["sum_val"].iloc[top_n:].sum()]})
-        work = pd.concat([top, others], ignore_index=True)
-    total = work["sum_val"].sum()
-    work["เปอร์เซ็นต์"] = (work["sum_val"] / total * 100).round(2) if total>0 else 0
-    st.markdown(f"**{title}**")
-    chart = alt.Chart(work).mark_arc(innerRadius=60).encode(
-        theta="sum_val:Q",
-        color=f"{label_col}:N",
-        tooltip=[f"{label_col}:N","sum_val:Q","เปอร์เซ็นต์:Q"]
-    )
-    st.altair_chart(chart, use_container_width=True)
-
-def make_bar(df: pd.DataFrame, label_col: str, value_col: str, top_n: int, title: str):
-    if df.empty or (value_col in df.columns and pd.to_numeric(df[value_col], errors="coerce").fillna(0).sum() == 0):
-        st.info(f"ยังไม่มีข้อมูลสำหรับกราฟ: {title}")
-        return
-    work = df.copy()
-    if value_col in work.columns:
-        work[value_col] = pd.to_numeric(work[value_col], errors="coerce").fillna(0)
-    work = work.groupby(label_col, dropna=False)[value_col].sum().reset_index().rename(columns={value_col: "sum_val"})
-    work[label_col] = work[label_col].replace("", "ไม่ระบุ")
-    work = work.sort_values("sum_val", ascending=False)
-    if len(work) > top_n:
-        work = work.head(top_n)
-    st.markdown(f"**{title}**")
-    chart = alt.Chart(work).mark_bar().encode(
-        x=alt.X(f"{label_col}:N", sort='-y'),
-        y=alt.Y("sum_val:Q"),
-        tooltip=[f"{label_col}:N","sum_val:Q"]
-    )
-    st.altair_chart(chart.properties(height=320), use_container_width=True)
-
-def page_dashboard(sh):
-    st.markdown("<div class='block-card'>", unsafe_allow_html=True)
-    st.subheader("📊 Dashboard (ปรับแต่งได้)")
-
-    items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
-    txns  = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
-    cats = read_df(sh, SHEET_CATS, CATS_HEADERS)
-    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
-    cat_map = {str(r['รหัสหมวด']).strip(): str(r['ชื่อหมวด']).strip() for _, r in cats.iterrows()} if not cats.empty else {}
-    br_map = {str(r['รหัสสาขา']).strip(): f"{str(r['รหัสสาขา']).strip()} | {str(r['ชื่อสาขา']).strip()}" for _, r in branches.iterrows()} if not branches.empty else {}
-
-    total_items = len(items)
-    total_qty = items["คงเหลือ"].apply(lambda x: int(float(x)) if str(x).strip() != "" else 0).sum() if not items.empty else 0
-    low_df = items[(items["ใช้งาน"].str.upper() == "Y") & (items["คงเหลือ"].astype(str) != "")]
-    if not low_df.empty:
-        low_df = low_df[pd.to_numeric(low_df["คงเหลือ"], errors='coerce').fillna(0) <= pd.to_numeric(low_df["จุดสั่งซื้อ"], errors='coerce').fillna(0)]
-    low_count = len(low_df) if not low_df.empty else 0
-
-    c1, c2, c3 = st.columns(3)
-    with c1: st.metric("จำนวนรายการ", f"{total_items:,}")
-    with c2: st.metric("ยอดคงเหลือรวม", f"{total_qty:,}")
-    with c3: st.metric("ใกล้หมดสต็อก", f"{low_count:,}")
-
-    st.markdown("### 🎛️ ตัวเลือกการแสดงผล")
-    colA, colB, colC = st.columns([2,1,1])
-    with colA:
-        chart_opts = st.multiselect(
-            "เลือกกราฟวงกลมที่ต้องการแสดง",
-            options=[
-                "คงเหลือตามหมวดหมู่",
-                "คงเหลือตามที่เก็บ",
-                "จำนวนรายการตามหมวดหมู่",
-                "เบิกตามสาขา (OUT)",
-                "เบิกตามอุปกรณ์ (OUT)",
-                "เบิกตามหมวดหมู่ (OUT)",
-                "Ticket ตามสถานะ",
-                "Ticket ตามสาขา",
-            ],
-            default=["คงเหลือตามหมวดหมู่","เบิกตามสาขา (OUT)","Ticket ตามสถานะ"]
-        )
-    with colB:
-        top_n = st.slider("Top-N ต่อกราฟ", min_value=3, max_value=20, value=10, step=1)
-    with colC:
-        per_row = st.selectbox("จำนวนกราฟต่อแถว", [1,2,3,4], index=1)
-    chart_kind = st.radio("ชนิดกราฟ", ["กราฟวงกลม (Pie)", "กราฟแท่ง (Bar)"], horizontal=True)
-
-    st.markdown("### ⏱️ ช่วงเวลา (ใช้กับกราฟประเภท 'เบิก ... (OUT)' เท่านั้น)")
-    colR1, colR2, colR3 = st.columns(3)
-    with colR1:
-        range_choice = st.selectbox("เลือกช่วงเวลา", ["วันนี้","7 วันล่าสุด","30 วันล่าสุด","90 วันล่าสุด","ปีนี้","กำหนดเอง"], index=2)
-    with colR2:
-        d1 = st.date_input("วันที่เริ่ม", value=datetime.now(TZ).date()-timedelta(days=29))
-    with colR3:
-        d2 = st.date_input("วันที่สิ้นสุด", value=datetime.now(TZ).date())
-    start_date, end_date = parse_range(range_choice, d1, d2)
-
-    # Prepare txns OUT filtered
-    if not txns.empty:
-        tx = txns.copy()
-        tx["วันเวลา"] = pd.to_datetime(tx["วันเวลา"], errors='coerce')
-        tx = tx.dropna(subset=["วันเวลา"])
-        tx = tx[(tx["วันเวลา"].dt.date >= start_date) & (tx["วันเวลา"].dt.date <= end_date)]
-        tx["จำนวน"] = pd.to_numeric(tx["จำนวน"], errors="coerce").fillna(0)
-        tx_out = tx[tx["ประเภท"]=="OUT"]
-    else:
-        tx_out = pd.DataFrame(columns=TXNS_HEADERS)
-
-    charts = []
-    if "คงเหลือตามหมวดหมู่" in chart_opts and not items.empty:
-        tmp = items.copy()
-        tmp["คงเหลือ"] = pd.to_numeric(tmp["คงเหลือ"], errors="coerce").fillna(0)
-        tmp = tmp.groupby("หมวดหมู่")["คงเหลือ"].sum().reset_index()
-        tmp["หมวดหมู่ชื่อ"] = tmp["หมวดหมู่"].map(cat_map).fillna(tmp["หมวดหมู่"])
-        charts.append(("คงเหลือตามหมวดหมู่", tmp, "หมวดหมู่ชื่อ", "คงเหลือ"))
-
-    if "คงเหลือตามที่เก็บ" in chart_opts and not items.empty:
-        tmp = items.copy()
-        tmp["คงเหลือ"] = pd.to_numeric(tmp["คงเหลือ"], errors="coerce").fillna(0)
-        tmp = tmp.groupby("ที่เก็บ")["คงเหลือ"].sum().reset_index()
-        charts.append(("คงเหลือตามที่เก็บ", tmp, "ที่เก็บ", "คงเหลือ"))
-
-    if "จำนวนรายการตามหมวดหมู่" in chart_opts and not items.empty:
-        tmp = items.copy()
-        tmp["count"] = 1
-        tmp = tmp.groupby("หมวดหมู่")["count"].sum().reset_index()
-        tmp["หมวดหมู่ชื่อ"] = tmp["หมวดหมู่"].map(cat_map).fillna(tmp["หมวดหมู่"])
-        charts.append(("จำนวนรายการตามหมวดหมู่", tmp, "หมวดหมู่ชื่อ", "count"))
-
-    if "เบิกตามสาขา (OUT)" in chart_opts:
-        if not tx_out.empty:
-            tmp = tx_out.groupby("สาขา", dropna=False)["จำนวน"].sum().reset_index()
-            tmp["สาขาแสดง"] = tmp["สาขา"].apply(lambda x: br_map.get(str(x).split(" | ")[0], str(x) if "|" in str(x) else str(x)))
-            charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", tmp, "สาขาแสดง", "จำนวน"))
-        else:
-            charts.append((f"เบิกตามสาขา (OUT) {start_date} ถึง {end_date}", pd.DataFrame({"สาขา":[], "จำนวน":[]}), "สาขา", "จำนวน"))
-
-    if "เบิกตามอุปกรณ์ (OUT)" in chart_opts:
-        if not tx_out.empty:
-            tmp = tx_out.groupby("ชื่ออุปกรณ์")["จำนวน"].sum().reset_index()
-            charts.append((f"เบิกตามอุปกรณ์ (OUT) {start_date} ถึง {end_date}", tmp, "ชื่ออุปกรณ์", "จำนวน"))
-        else:
-            charts.append((f"เบิกตามอุปกรณ์ (OUT) {start_date} ถึง {end_date}", pd.DataFrame({"ชื่ออุปกรณ์":[], "จำนวน":[]}), "ชื่ออุปกรณ์", "จำนวน"))
-
-    if "เบิกตามหมวดหมู่ (OUT)" in chart_opts:
-        if not tx_out.empty and not items.empty:
-            it = items[["รหัส","หมวดหมู่"]].copy()
-            tmp = tx_out.merge(it, left_on="รหัส", right_on="รหัส", how="left")
-            tmp = tmp.groupby("หมวดหมู่")["จำนวน"].sum().reset_index()
-            charts.append((f"เบิกตามหมวดหมู่ (OUT) {start_date} ถึง {end_date}", tmp, "หมวดหมู่", "จำนวน"))
-        else:
-            charts.append((f"เบิกตามหมวดหมู่ (OUT) {start_date} ถึง {end_date}", pd.DataFrame({"หมวดหมู่":[], "จำนวน":[]}), "หมวดหมู่", "จำนวน"))
-
-    # Tickets for charts
-    tickets_df = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
-    if not tickets_df.empty:
-        tdf = tickets_df.copy()
-        tdf["วันที่แจ้ง"] = pd.to_datetime(tdf["วันที่แจ้ง"], errors="coerce")
-        tdf = tdf.dropna(subset=["วันที่แจ้ง"])
-        tdf = tdf[(tdf["วันที่แจ้ง"].dt.date >= start_date) & (tdf["วันที่แจ้ง"].dt.date <= end_date)]
-    else:
-        tdf = tickets_df
-
-    if "Ticket ตามสถานะ" in chart_opts:
-        if not tdf.empty:
-            tmp = tdf.groupby("สถานะ")["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวน"})
-            charts.append((f"Ticket ตามสถานะ {start_date} ถึง {end_date}", tmp, "สถานะ", "จำนวน"))
-        else:
-            charts.append((f"Ticket ตามสถานะ {start_date} ถึง {end_date}", pd.DataFrame({"สถานะ":[], "จำนวน":[]}), "สถานะ", "จำนวน"))
-
-    if "Ticket ตามสาขา" in chart_opts:
-        if not tdf.empty:
-            tmp = tdf.groupby("สาขา", dropna=False)["TicketID"].count().reset_index().rename(columns={"TicketID":"จำนวน"})
-            tmp["สาขาแสดง"] = tmp["สาขา"].apply(lambda x: br_map.get(str(x).split(" | ")[0], str(x) if "|" in str(x) else str(x)))
-            charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", tmp, "สาขาแสดง", "จำนวน"))
-        else:
-            charts.append((f"Ticket ตามสาขา {start_date} ถึง {end_date}", pd.DataFrame({"สาขา":[], "จำนวน":[]}), "สาขา", "จำนวน"))
-
-    if len(charts)==0:
-        st.info("โปรดเลือกกราฟที่ต้องการแสดงจากด้านบน")
-    else:
-        rows = (len(charts) + per_row - 1) // per_row
-        idx = 0
-        for r in range(rows):
-            cols = st.columns(per_row)
-            for c in range(per_row):
-                if idx >= len(charts): break
-                title, df, label_col, value_col = charts[idx]
-                with cols[c]:
-                    if chart_kind.endswith('(Bar)'):
-                        make_bar(df, label_col, value_col, top_n, title)
-                    else:
-                        make_pie(df, label_col, value_col, top_n, title)
-                idx += 1
-
-    # Low stock list
-    items_num = items.copy()
-    if not items_num.empty:
-        items_num["คงเหลือ"] = pd.to_numeric(items_num["คงเหลือ"], errors="coerce").fillna(0)
-        items_num["จุดสั่งซื้อ"] = pd.to_numeric(items_num["จุดสั่งซื้อ"], errors="coerce").fillna(0)
-        low_df2 = items_num[(items_num["ใช้งาน"].str.upper()=="Y") & (items_num["คงเหลือ"] <= items_num["จุดสั่งซื้อ"])]
-    else:
-        low_df2 = pd.DataFrame(columns=ITEMS_HEADERS)
-    if not low_df2.empty:
-        with st.expander("⚠️ อุปกรณ์ใกล้หมด (Reorder)", expanded=False):
-            st.dataframe(low_df2[["รหัส","ชื่ออุปกรณ์","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ"]], height=240, use_container_width=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# -------------------- Stock page --------------------
-def get_unit_options(items_df):
-    opts = sorted([x for x in items_df["หน่วย"].dropna().astype(str).unique() if x.strip()!=""])
-    if "ชิ้น" not in opts: opts = ["ชิ้น"] + opts
-    return opts + ["พิมพ์เอง"]
-
-def get_loc_options(items_df):
-    opts = sorted([x for x in items_df["ที่เก็บ"].dropna().astype(str).unique() if x.strip()!=""])
-    if "IT Room" not in opts: opts = ["IT Room"] + opts
-    return opts + ["พิมพ์เอง"]
-
-def generate_item_code(sh, cat_code: str) -> str:
-    items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
-    pattern = re.compile(rf"^{re.escape(cat_code)}-(\d+)$")
-    max_num = 0
-    for code in items["รหัส"].dropna().astype(str):
-        m = pattern.match(code.strip())
-        if m:
-            try:
-                num = int(m.group(1))
-                if num > max_num: max_num = num
-            except:
-                pass
-    next_num = max_num + 1
-    return f"{cat_code}-{next_num:03d}"
-
-def ensure_item_row(items_df, code): return (items_df["รหัส"]==code).any()
-
-def adjust_stock(sh, code, delta, actor, branch="", note="", txn_type="OUT", ts_str=None):
-    items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
-    if items.empty or not ensure_item_row(items, code): st.error("ไม่พบรหัสอุปกรณ์นี้ในคลัง"); return False
-    row = items[items["รหัส"]==code].iloc[0]
-    cur = int(float(row["คงเหลือ"])) if str(row["คงเหลือ"]).strip()!="" else 0
-    if txn_type=="OUT" and cur+delta < 0: st.error("สต็อกไม่เพียงพอ"); return False
-    items.loc[items["รหัส"]==code, "คงเหลือ"] = cur+delta; write_df(sh, SHEET_ITEMS, items)
-    ts = ts_str if ts_str else get_now_str()
-    append_row(sh, SHEET_TXNS, [str(uuid.uuid4())[:8], ts, txn_type, code, row["ชื่ออุปกรณ์"], branch, abs(delta), actor, note])
-    return True
-
-def page_stock(sh):
-    st.markdown("<div class='block-card'>", unsafe_allow_html=True)
-    st.subheader("📦 คลังอุปกรณ์")
-
-    items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
-    cats  = read_df(sh, SHEET_CATS, CATS_HEADERS)
-    q = st.text_input("ค้นหา (รหัส/ชื่อ/หมวด)")
-    view_df = items.copy()
-    if q and not items.empty:
-        mask = items["รหัส"].str.contains(q, case=False, na=False) | items["ชื่ออุปกรณ์"].str.contains(q, case=False, na=False) | items["หมวดหมู่"].str.contains(q, case=False, na=False)
-        view_df = items[mask]
-    # Selectable table
-    chosen_code = None
-    if hasattr(st, "data_editor"):
-        show = view_df.copy()
-        show["เลือก"] = False
-        ed = st.data_editor(show[["เลือก","รหัส","ชื่ออุปกรณ์","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ","หมวดหมู่","หน่วย","ใช้งาน"]],
-                            use_container_width=True, height=320, num_rows="fixed",
-                            column_config={"เลือก": st.column_config.CheckboxColumn()})
-        picked = ed[ed["เลือก"]==True]
-        if not picked.empty:
-            chosen_code = str(picked.iloc[0]["รหัส"])
-    else:
-        st.dataframe(view_df, height=320, use_container_width=True)
-
-    unit_opts = get_unit_options(items)
-    loc_opts  = get_loc_options(items)
-
-    if st.session_state.get("role") in ("admin","staff"):
-        t_add, t_edit = st.tabs(["➕ เพิ่ม/อัปเดต (รหัสใหม่)","✏️ แก้ไข/ลบ (เลือกรายการเดิม)"])
-
-        with t_add:
-            with st.form("item_add", clear_on_submit=True):
-                c1,c2,c3 = st.columns(3)
-                with c1:
-                    if cats.empty: st.info("ยังไม่มีหมวดหมู่ในชีต Categories (ใช้เมนู นำเข้า/แก้ไข หมวดหมู่ เพื่อเพิ่ม)"); cat_opt=""
-                    else:
-                        opts = (cats["รหัสหมวด"]+" | "+cats["ชื่อหมวด"]).tolist(); selected = st.selectbox("หมวดหมู่", options=opts)
-                        cat_opt = selected.split(" | ")[0]
-                    name = st.text_input("ชื่ออุปกรณ์")
-                with c2:
-                    sel_unit = st.selectbox("หน่วย (เลือกจากรายการ)", options=unit_opts, index=0)
-                    unit = st.text_input("ระบุหน่วยใหม่", value="", disabled=(sel_unit!="พิมพ์เอง"))
-                    if sel_unit!="พิมพ์เอง": unit = sel_unit
-                    qty = st.number_input("คงเหลือ", min_value=0, value=0, step=1)
-                    rop = st.number_input("จุดสั่งซื้อ", min_value=0, value=0, step=1)
-                with c3:
-                    sel_loc = st.selectbox("ที่เก็บ (เลือกจากรายการ)", options=loc_opts, index=0)
-                    loc = st.text_input("ระบุที่เก็บใหม่", value="", disabled=(sel_loc!="พิมพ์เอง"))
-                    if sel_loc!="พิมพ์เอง": loc = sel_loc
-                    active = st.selectbox("ใช้งาน", ["Y","N"], index=0)
-                    auto_code = st.checkbox("สร้างรหัสอัตโนมัติ", value=True)
-                    code = st.text_input("รหัสอุปกรณ์ (ถ้าไม่ออโต้)", disabled=auto_code)
-                    s_add = st.form_submit_button("บันทึก/อัปเดต", use_container_width=True)
-            if s_add:
-                if (auto_code and not cat_opt) or (not auto_code and code.strip()==""): st.error("กรุณาเลือกหมวด/ระบุรหัส")
-                else:
-                    items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS); gen_code = generate_item_code(sh, cat_opt) if auto_code else code.strip().upper()
-                    if (items["รหัส"]==gen_code).any():
-                        items.loc[items["รหัส"]==gen_code, ITEMS_HEADERS] = [gen_code, cat_opt, name, unit, qty, rop, loc, active]
-                    else:
-                        items = pd.concat([items, pd.DataFrame([[gen_code, cat_opt, name, unit, qty, rop, loc, active]], columns=ITEMS_HEADERS)], ignore_index=True)
-                    write_df(sh, SHEET_ITEMS, items); st.success(f"บันทึกเรียบร้อย (รหัส: {gen_code})"); st.rerun()
-
-        with t_edit:
-            st.caption("เลือก 'รหัสอุปกรณ์' จากตารางด้านบนเพื่อโหลดขึ้นมาปรับแก้ หรือเลือกจากลิสต์")
-            labels = [f'{r["รหัส"]} | {r["ชื่ออุปกรณ์"]}' for _, r in items.iterrows()] if not items.empty else []
-            if chosen_code and any(x.startswith(chosen_code+" |") for x in labels):
-                default_idx = labels.index(next(x for x in labels if x.startswith(chosen_code+" |")))
-            else:
-                default_idx = 0 if labels else None
-            pick_label = st.selectbox("เลือกรหัสอุปกรณ์", options=(["-- เลือก --"]+labels) if labels else ["-- เลือก --"], index=(default_idx+1 if default_idx is not None else 0))
-            if pick_label != "-- เลือก --":
-                pick = pick_label.split(" | ", 1)[0]
-                row = items[items["รหัส"] == pick].iloc[0]
-                unit_opts_edit = unit_opts[:-1]
-                if row["หน่วย"] not in unit_opts_edit and str(row["หน่วย"]).strip()!="":
-                    unit_opts_edit = [row["หน่วย"]] + unit_opts_edit
-                unit_opts_edit = unit_opts_edit + ["พิมพ์เอง"]
-                loc_opts_edit = loc_opts[:-1]
-                if row["ที่เก็บ"] not in loc_opts_edit and str(row["ที่เก็บ"]).strip()!="":
-                    loc_opts_edit = [row["ที่เก็บ"]] + loc_opts_edit
-                loc_opts_edit = loc_opts_edit + ["พิมพ์เอง"]
-
-                with st.form("item_edit", clear_on_submit=False):
-                    c1,c2,c3 = st.columns(3)
-                    with c1:
-                        name = st.text_input("ชื่ออุปกรณ์", value=row["ชื่ออุปกรณ์"])
-                        sel_unit = st.selectbox("หน่วย (เลือกจากรายการ)", options=unit_opts_edit, index=0)
-                        unit = st.text_input("ระบุหน่วยใหม่", value="", disabled=(sel_unit!="พิมพ์เอง"))
-                        if sel_unit!="พิมพ์เอง": unit = sel_unit
-                    with c2:
-                        qty = st.number_input("คงเหลือ", min_value=0, value=int(float(row["คงเหลือ"]) if str(row["คงเหลือ"]).strip()!="" else 0), step=1)
-                        rop = st.number_input("จุดสั่งซื้อ", min_value=0, value=int(float(row["จุดสั่งซื้อ"]) if str(row["จุดสั่งซื้อ"]).strip()!="" else 0), step=1)
-                    with c3:
-                        sel_loc = st.selectbox("ที่เก็บ (เลือกจากรายการ)", options=loc_opts_edit, index=0)
-                        loc = st.text_input("ระบุที่เก็บใหม่", value="", disabled=(sel_loc!="พิมพ์เอง"))
-                        if sel_loc!="พิมพ์เอง": loc = sel_loc
-                        active = st.selectbox("ใช้งาน", ["Y","N"], index=0 if str(row["ใช้งาน"]).upper()=="Y" else 1)
-                    col_save, col_delete = st.columns([3,1])
-                    s_save = col_save.form_submit_button("💾 บันทึกการแก้ไข", use_container_width=True)
-                    s_del  = col_delete.form_submit_button("🗑️ ลบรายการ", use_container_width=True)
-                if s_save:
-                    items.loc[items["รหัส"]==pick, ITEMS_HEADERS] = [pick, row["หมวดหมู่"], name, unit, qty, rop, loc, "Y" if active=="Y" else "N"]
-                    write_df(sh, SHEET_ITEMS, items); st.success("อัปเดตแล้ว"); st.rerun()
-                if s_del:
-                    items = items[items["รหัส"]!=pick]; write_df(sh, SHEET_ITEMS, items); st.success(f"ลบ {pick} แล้ว"); st.rerun()
-
-# -------------------- Tickets page (unchanged UI + fixes) --------------------
-def generate_ticket_id() -> str:
-    return "TCK-" + datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
-
-def page_tickets(sh):
-    st.markdown("<div class='block-card'>", unsafe_allow_html=True)
-    st.subheader("🛠️ แจ้งซ่อม / แจ้งปัญหา (Tickets)")
-
-    tickets = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
-    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
-    t_cats = read_df(sh, SHEET_TICKET_CATS, TICKET_CAT_HEADERS)
-
-    # Filters
-    st.markdown("### ตัวกรอง")
-    f1, f2, f3, f4 = st.columns(4)
-    with f1:
-        statuses = ["ทั้งหมด","รับแจ้ง","กำลังดำเนินการ","ดำเนินการเสร็จ"]
-        status_pick = st.selectbox("สถานะ", statuses, index=0, key="tk_status")
-    with f2:
-        br_opts = ["ทั้งหมด"] + ((branches["รหัสสาขา"] + " | " + branches["ชื่อสาขา"]).tolist() if not branches.empty else [])
-        branch_pick = st.selectbox("สาขา", br_opts, index=0, key="tk_branch")
-    with f3:
-        cat_opts = ["ทั้งหมด"] + ((t_cats["รหัสหมวดปัญหา"] + " | " + t_cats["ชื่อหมวดปัญหา"]).tolist() if not t_cats.empty else [])
-        cat_pick = st.selectbox("หมวดหมู่ปัญหา", cat_opts, index=0, key="tk_cat")
-    with f4:
-        q = st.text_input("ค้นหา (ผู้แจ้ง/หมวด/รายละเอียด)", key="tk_query")
-
-    # Date filter
-    dcol1, dcol2 = st.columns(2)
-    with dcol1:
-        d1 = st.date_input("วันที่เริ่ม", value=(date.today()-timedelta(days=90)), key="tk_d1")
-    with dcol2:
-        d2 = st.date_input("วันที่สิ้นสุด", value=date.today(), key="tk_d2")
-
-    view = tickets.copy()
-    if not view.empty:
-        view["วันที่แจ้ง"] = pd.to_datetime(view["วันที่แจ้ง"], errors="coerce")
-        view = view.dropna(subset=["วันที่แจ้ง"])
-        view = view[(view["วันที่แจ้ง"].dt.date >= st.session_state["tk_d1"]) & (view["วันที่แจ้ง"].dt.date <= st.session_state["tk_d2"])]
-        if status_pick != "ทั้งหมด":
-            view = view[view["สถานะ"] == status_pick]
-        if branch_pick != "ทั้งหมด":
-            view = view[view["สาขา"] == branch_pick]
-        if "cat_pick" in locals() and cat_pick != "ทั้งหมด":
-            view = view[view["หมวดหมู่"] == cat_pick]
-        if q:
-            mask = (view["ผู้แจ้ง"].str.contains(q, case=False, na=False) |
-                    view["หมวดหมู่"].str.contains(q, case=False, na=False) |
-                    view["รายละเอียด"].str.contains(q, case=False, na=False))
-            view = view[mask]
-
-    st.markdown("### รายการแจ้งปัญหา (ติ๊กเลือกเพื่อแก้ไข)")
-    chosen_tid = None
-    if hasattr(st, "data_editor"):
-        show = view.copy()
-        show["เลือก"] = False
-        ed = st.data_editor(
-            show[["เลือก","TicketID","วันที่แจ้ง","สาขา","ผู้แจ้ง","หมวดหมู่","สถานะ","ผู้รับผิดชอบ","อัปเดตล่าสุด","หมายเหตุ"]],
-            use_container_width=True, height=300, num_rows="fixed",
-            column_config={"เลือก": st.column_config.CheckboxColumn(help="ติ๊กเพื่อเลือก Ticket")}
-        )
-        picked = ed[ed["เลือก"] == True]
-        if not picked.empty:
-            chosen_tid = str(picked.iloc[0]["TicketID"])
-    else:
-        st.dataframe(view.sort_values("วันที่แจ้ง", ascending=False), height=300, use_container_width=True)
-
-    st.markdown("---")
-    t_add, t_update = st.tabs(["➕ รับแจ้งใหม่","🔁 เปลี่ยนสถานะ/แก้ไข"])
-
-    with t_add:
-        with st.form("tk_new", clear_on_submit=True):
-            c1,c2,c3 = st.columns(3)
-            with c1:
-                branch_sel = st.selectbox("สาขา", br_opts[1:] if len(br_opts)>1 else ["พิมพ์เอง"])
-                if branch_sel == "พิมพ์เอง":
-                    branch_sel = st.text_input("ระบุสาขา (พิมพ์เอง)", value="")
-                reporter = st.text_input("ผู้แจ้ง", value="")
-            with c2:
-                tkc_opts = ((t_cats["รหัสหมวดปัญหา"] + " | " + t_cats["ชื่อหมวดปัญหา"]).tolist() if not t_cats.empty else []) + ["พิมพ์เอง"]
-                pick_c = st.selectbox("หมวดหมู่ปัญหา", options=tkc_opts if tkc_opts else ["พิมพ์เอง"], key="tk_new_cat_sel")
-                cate_custom = st.text_input("ระบุหมวด (ถ้าเลือกพิมพ์เอง)", value="" if pick_c!="พิมพ์เอง" else "", disabled=(pick_c!="พิมพ์เอง"))
-                cate = pick_c if pick_c != "พิมพ์เอง" else cate_custom
-                assignee = st.text_input("ผู้รับผิดชอบ (IT)", value=st.session_state.get("user",""))
-            with c3:
-                detail = st.text_area("รายละเอียด", height=100)
-                note = st.text_input("หมายเหตุ", value="")
-            s = st.form_submit_button("บันทึกการรับแจ้ง", use_container_width=True)
-        if s:
-            tid = generate_ticket_id()
-            row = [tid, get_now_str(), branch_sel, reporter, cate, detail, "รับแจ้ง", assignee, get_now_str(), note]
-            append_row(sh, SHEET_TICKETS, row)
-            st.success(f"รับแจ้งเรียบร้อย (Ticket: {tid})")
-            st.rerun()
-
-    with t_update:
-        if tickets.empty:
-            st.info("ยังไม่มีรายการในชีต Tickets")
-        else:
-            labels = [f'{r["TicketID"]} | {str(r["สาขา"])}' for _, r in tickets.iterrows()]
-            if chosen_tid and any(x.startswith(chosen_tid+" |") for x in labels):
-                default_idx = labels.index(next(x for x in labels if x.startswith(chosen_tid+" |")))
-            else:
-                default_idx = 0
-            pick_label = st.selectbox("เลือก Ticket", options=["-- เลือก --"] + labels, index=default_idx+1 if labels else 0, key="tk_pick")
-            if pick_label != "-- เลือก --":
-                pick_id = pick_label.split(" | ", 1)[0]
-                row = tickets[tickets["TicketID"] == pick_id].iloc[0]
-                st.subheader(f"แก้ไข Ticket: {pick_id}")
-                with st.form("tk_edit", clear_on_submit=False):
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        t_branch = st.text_input("สาขา", value=str(row.get("สาขา", "")))
-                        t_type = st.selectbox("ประเภท", ["ฮาร์ดแวร์","ซอฟต์แวร์","เครือข่าย","อื่นๆ"], index=3)
-                    with c2:
-                        t_owner = st.text_input("ผู้แจ้ง", value=str(row.get("ผู้แจ้ง","")))
-                        statuses_edit = ["รับแจ้ง","กำลังดำเนินการ","ดำเนินการเสร็จ"]
-                        try:
-                            idx_default = statuses_edit.index(str(row.get("สถานะ","รับแจ้ง")))
-                        except ValueError:
-                            idx_default = 0
-                        t_status = st.selectbox("สถานะ", statuses_edit, index=idx_default)
-                        t_assignee = st.text_input("ผู้รับผิดชอบ", value=str(row.get("ผู้รับผิดชอบ","")))
-                    t_desc = st.text_area("รายละเอียด", value=str(row.get("รายละเอียด","")), height=120)
-                    t_note = st.text_input("หมายเหตุ", value=str(row.get("หมายเหตุ","")))
-                    fcol1, fcol2, fcol3 = st.columns(3)
-                    submit_update = fcol1.form_submit_button("อัปเดต")
-                    submit_delete = fcol3.form_submit_button("ลบรายการ")
-
-                if submit_update:
-                    try:
-                        idx = tickets.index[tickets["TicketID"] == pick_id][0]
-                        tickets.at[idx, "สาขา"] = t_branch
-                        tickets.at[idx, "ผู้แจ้ง"] = t_owner
-                        tickets.at[idx, "รายละเอียด"] = t_desc
-                        tickets.at[idx, "สถานะ"] = t_status
-                        tickets.at[idx, "ผู้รับผิดชอบ"] = t_assignee
-                        tickets.at[idx, "หมายเหตุ"] = t_note
-                        tickets.at[idx, "อัปเดตล่าสุด"] = get_now_str()
-                        write_df(sh, SHEET_TICKETS, tickets)
-                        st.success("อัปเดตสถานะ/รายละเอียดเรียบร้อย")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"อัปเดตไม่สำเร็จ: {e}")
-                if submit_delete:
-                    try:
-                        tickets2 = tickets[tickets["TicketID"] != pick_id].copy()
-                        write_df(sh, SHEET_TICKETS, tickets2)
-                        st.success("ลบรายการเรียบร้อย")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"ลบไม่สำเร็จ: {e}")
-
-# -------------------- Issue/Receive page (RESTORED multi-issue) --------------------
-def page_issue_out_multiN(sh):
-    """เบิก (OUT): เลือกสาขาก่อน แล้วกรอกได้หลายรายการในครั้งเดียว (จำนวนบรรทัดกำหนดได้)"""
-    items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
-    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
-
-    if items.empty:
-        st.info("ยังไม่มีรายการอุปกรณ์", icon="ℹ️"); return
-
-    # 1) เลือกสาขา/หน่วยงานผู้ขอ
-    bopt = st.selectbox("สาขา/หน่วยงานผู้ขอ", options=(branches["รหัสสาขา"]+" | "+branches["ชื่อสาขา"]).tolist() if not branches.empty else [])
-    branch_code = bopt.split(" | ")[0] if bopt else ""
-
-    # 2) ตั้งค่าแถวที่จะกรอก
-    n_rows = st.slider("จำนวนแถวสำหรับเบิกครั้งนี้", 1, 50, 5, 1)
-    st.markdown("**เลือกรายการที่ต้องการเบิก (หลายรายการต่อครั้ง)**")
-
-    # เตรียม options แสดงคงเหลือ
-    opts = []
-    for _, r in items.iterrows():
-        remain = int(pd.to_numeric(r["คงเหลือ"], errors="coerce") or 0)
-        opts.append(f'{r["รหัส"]} | {r["ชื่ออุปกรณ์"]} (คงเหลือ {remain})')
-
-    df_template = pd.DataFrame({"รายการ": [""]*n_rows, "จำนวน": [1]*n_rows})
-    ed = st.data_editor(
-        df_template,
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic",
-        column_config={
-            "รายการ": st.column_config.SelectboxColumn(options=opts, required=False),
-            "จำนวน": st.column_config.NumberColumn(min_value=1, step=1)
-        },
-        key="issue_out_multiN",
-    )
-
-    note = st.text_input("หมายเหตุ (ถ้ามี)", value="")
-    manual_out = st.checkbox("กำหนดวันเวลาเอง (OUT)", value=False, key="out_manual")
-    if manual_out:
-        d = st.date_input("วันที่ (OUT)", value=datetime.now(TZ).date(), key="out_d")
-        t = st.time_input("เวลา (OUT)", value=datetime.now(TZ).time().replace(microsecond=0), key="out_t")
-        ts_str = fmt_dt(combine_date_time(d, t))
-    else:
-        ts_str = None
-
-    if st.button("บันทึกการเบิก (หลายรายการ)", type="primary", disabled=(not branch_code)):
-        txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
-        errors = []
-        processed = 0
-        items_local = items.copy()
-
-        for _, r in ed.iterrows():
-            sel = str(r.get("รายการ","") or "").strip()
-            qty = int(pd.to_numeric(r.get("จำนวน", 0), errors="coerce") or 0)
-            if not sel or qty <= 0:
-                continue
-
-            code_sel = sel.split(" | ")[0]
-            row_sel = items_local[items_local["รหัส"]==code_sel]
-            if row_sel.empty:
-                errors.append(f"{code_sel}: ไม่พบในคลัง")
-                continue
-            row_sel = row_sel.iloc[0]
-            remain = int(pd.to_numeric(row_sel["คงเหลือ"], errors="coerce") or 0)
-            if qty > remain:
-                errors.append(f"{code_sel}: เกินคงเหลือ ({remain})")
-                continue
-
-            new_remain = remain - qty
-            items_local.loc[items_local["รหัส"]==code_sel, "คงเหลือ"] = str(new_remain)
-
-            txn = [str(uuid.uuid4())[:8], ts_str if ts_str else get_now_str(),
-                   "OUT", code_sel, row_sel["ชื่ออุปกรณ์"], branch_code, str(qty), get_username(), note]
-            txns = pd.concat([txns, pd.DataFrame([txn], columns=TXNS_HEADERS)], ignore_index=True)
-            processed += 1
-
-        if processed > 0:
-            write_df(sh, SHEET_ITEMS, items_local)
-            write_df(sh, SHEET_TXNS, txns)
-            st.success(f"บันทึกการเบิกแล้ว {processed} รายการ ✅")
-            st.rerun()
-        else:
-            st.warning("ยังไม่มีบรรทัดที่สมบูรณ์ให้บันทึก", icon="⚠️")
-        if errors:
-            st.warning(pd.DataFrame({"ข้อผิดพลาด": errors}))
-
-def page_issue_receive(sh):
-    st.markdown("<div class='block-card'>", unsafe_allow_html=True)
-    st.subheader("🧾 เบิก/รับเข้า")
-    if st.session_state.get("role") not in ("admin","staff"):
-        st.info("สิทธิ์ผู้ชมไม่สามารถบันทึกรายการได้")
-        st.markdown("</div>", unsafe_allow_html=True); return
-
-    items = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
-    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
-    if items.empty:
-        st.warning("ยังไม่มีรายการอุปกรณ์ในคลัง")
-        st.markdown("</div>", unsafe_allow_html=True); return
-
-    t1,t2 = st.tabs(["เบิก (OUT) — หลายรายการต่อครั้ง","รับเข้า (IN)"])
-
-    with t1:
-        page_issue_out_multiN(sh)
-
-    with t2:
-        with st.form("recv", clear_on_submit=True):
-            c1,c2 = st.columns([2,1])
-            with c1: item = st.selectbox("เลือกอุปกรณ์", options=items["รหัส"]+" | "+items["ชื่ออุปกรณ์"], key="recv_item")
-            with c2: qty = st.number_input("จำนวนที่รับเข้า", min_value=1, value=1, step=1, key="recv_qty")
-            branch = st.text_input("แหล่งที่มา/เลข PO", key="recv_branch"); note = st.text_input("หมายเหตุ", placeholder="เช่น ซื้อเข้า-เติมสต็อก", key="recv_note")
-            st.markdown("**วัน-เวลารับเข้า**")
-            manual_in = st.checkbox("กำหนดวันเวลาเอง ", value=False, key="in_manual")
-            if manual_in:
-                d = st.date_input("วันที่", value=datetime.now(TZ).date(), key="in_d")
-                t = st.time_input("เวลา", value=datetime.now(TZ).time().replace(microsecond=0), key="in_t")
-                ts_str = fmt_dt(combine_date_time(d, t))
-            else:
-                ts_str = None
-            s = st.form_submit_button("บันทึกรับเข้า", use_container_width=True)
-        if s:
-            code = item.split(" | ")[0]
-            ok = adjust_stock(sh, code, qty, st.session_state.get("user","unknown"), branch, note, "IN", ts_str=ts_str)
-            if ok: st.success("บันทึกรับเข้าแล้ว"); st.rerun()
-
-# -------------------- Reports page --------------------
-def is_test_text(s: str) -> bool:
-    s = str(s).lower()
-    return ("test" in s) or ("ทดสอบ" in s)
-
-def page_reports(sh):
-    st.markdown("<div class='block-card'>", unsafe_allow_html=True)
-    st.subheader("📑 รายงาน / ประวัติ")
-
-    txns = read_df(sh, SHEET_TXNS, TXNS_HEADERS)
-    branches = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
-    br_map = {str(r["รหัสสาขา"]).strip(): f'{str(r["รหัสสาขา"]).strip()} | {str(r["ชื่อสาขา"]).strip()}' for _, r in branches.iterrows()} if not branches.empty else {}
-
-    tickets = read_df(sh, SHEET_TICKETS, TICKETS_HEADERS)
-
-    if "report_d1" not in st.session_state or "report_d2" not in st.session_state:
-        today = datetime.now(TZ).date()
-        st.session_state["report_d1"] = today - timedelta(days=30)
-        st.session_state["report_d2"] = today
-
-    def _set_range(days=None, today=False, this_month=False, this_year=False):
-        nowd = datetime.now(TZ).date()
-        if today:
-            st.session_state["report_d1"] = nowd
-            st.session_state["report_d2"] = nowd
-        elif this_month:
-            st.session_state["report_d1"] = nowd.replace(day=1)
-            st.session_state["report_d2"] = nowd
-        elif this_year:
-            st.session_state["report_d1"] = date(nowd.year, 1, 1)
-            st.session_state["report_d2"] = nowd
-        elif days is not None:
-            st.session_state["report_d1"] = nowd - timedelta(days=days-1)
-            st.session_state["report_d2"] = nowd
-
-    st.markdown("### ⏱️ เลือกช่วงวันที่อย่างรวดเร็ว")
-    bcols = st.columns(6)
-    with bcols[0]: st.button("วันนี้", on_click=_set_range, kwargs=dict(today=True))
-    with bcols[1]: st.button("7 วันล่าสุด", on_click=_set_range, kwargs=dict(days=7))
-    with bcols[2]: st.button("30 วันล่าสุด", on_click=_set_range, kwargs=dict(days=30))
-    with bcols[3]: st.button("90 วันล่าสุด", on_click=_set_range, kwargs=dict(days=90))
-    with bcols[4]: st.button("เดือนนี้", on_click=_set_range, kwargs=dict(this_month=True))
-    with bcols[5]: st.button("ปีนี้", on_click=_set_range, kwargs=dict(this_year=True))
-
-    with st.expander("กำหนดช่วงวันที่เอง (เลือกแล้วกด 'ใช้ช่วงนี้')", expanded=False):
-        d1m = st.date_input("วันที่เริ่ม (กำหนดเอง)", value=st.session_state["report_d1"])
-        d2m = st.date_input("วันที่สิ้นสุด (กำหนดเอง)", value=st.session_state["report_d2"])
-        st.button("ใช้ช่วงนี้", on_click=lambda: (st.session_state.__setitem__("report_d1", d1m),
-                                                st.session_state.__setitem__("report_d2", d2m)))
-
-    q = st.text_input("ค้นหา (ชื่อ/รหัส/สาขา/เรื่อง)")
-
-    d1 = st.session_state["report_d1"]
-    d2 = st.session_state["report_d2"]
-    st.caption(f"ช่วงที่เลือก: **{d1} → {d2}**")
-
-    if not txns.empty:
-        df_f = txns.copy()
-        df_f["วันเวลา"] = pd.to_datetime(df_f["วันเวลา"], errors="coerce")
-        df_f = df_f.dropna(subset=["วันเวลา"])
-        df_f = df_f[(df_f["วันเวลา"].dt.date >= d1) & (df_f["วันเวลา"].dt.date <= d2)]
-        if q:
-            mask_q = (
-                df_f["ชื่ออุปกรณ์"].str.contains(q, case=False, na=False) |
-                df_f["รหัส"].str.contains(q, case=False, na=False) |
-                df_f["สาขา"].str.contains(q, case=False, na=False)
+def ensure_branch_map():
+    if not CFG["branch_code_name"]:
+        # ตัวอย่าง mapping เริ่มต้น (แก้ไขได้ใน Settings → Branches)
+        CFG["branch_code_name"] = {
+            "SWC001": "สาขากรุงเทพฯ (ตัวอย่าง)",
+            "SWC002": "สาขานครราชสีมา (ตัวอย่าง)",
+            "SWC003": "สาขาขอนแก่น (ตัวอย่าง)",
+        }
+
+ensure_branch_map()
+
+def code_to_name(code: str) -> str:
+    return CFG["branch_code_name"].get(code, "")
+
+# =======================================================
+# Pages
+# =======================================================
+def page_dashboard():
+    section_title("Dashboard", "📊")
+    col1, col2, col3 = st.columns(3)
+    # KPI ง่ายๆ
+    total_items = len(STOCK)
+    low_items = (pd.to_numeric(STOCK["qty"], errors="coerce").fillna(0) <= pd.to_numeric(STOCK["min_qty"], errors="coerce").fillna(0)).sum()
+    total_out = len(OUTS)
+    col1.metric("จำนวนรายการในคลัง", f"{total_items:,}")
+    col2.metric("ใกล้ต่ำกว่าขั้นต่ำ", f"{low_items:,}")
+    col3.metric("รายการเบิกรวม", f"{total_out:,}")
+
+    st.divider()
+    st.write("**ภาพรวมสต็อกล่าสุด**")
+    st.dataframe(STOCK.head(50), use_container_width=True)
+
+def page_stock():
+    section_title("คลังอุปกรณ์ (Stock)", "📦")
+    st.info("เพิ่ม/แก้ไขข้อมูลคงคลังได้โดยตรงในตาราง จากนั้นกดปุ่ม **บันทึก** ด้านล่าง", icon="ℹ️")
+    editable = df_editor(STOCK, key="stock_editor")
+    if st.button("💾 บันทึกคลังอุปกรณ์", type="primary"):
+        st.session_state["tables"] = (editable, OUTS, INS, USERS, CATS)
+        write_table("stock", editable)
+        st.success("บันทึกเรียบร้อย ✅")
+
+def page_out_in():
+    section_title("เบิก/รับ (OUT/IN)", "🧾")
+    tab_out, tab_in = st.tabs(["🔻 เบิกหลายรายการ (OUT)", "🔺 รับเข้า (IN)"])
+
+    with tab_out:
+        st.caption("เลือกหลายรายการจากคลัง → ใส่จำนวนที่จะเบิก → ยืนยันเพื่อบันทึกธุรกรรม OUT")
+        left, right = st.columns([1,1])
+        with left:
+            branches = list(CFG["branch_code_name"].keys())
+            sel_branch = st.selectbox("เลือกสาขา", options=branches, format_func=lambda c: f"{c} - {code_to_name(c)}")
+            requester = st.text_input("ชื่อผู้เบิก/ผู้แจ้ง", "")
+            note = st.text_input("หมายเหตุ (ถ้ามี)", "")
+        with right:
+            # เลือกหลายรายการ
+            st.write("**เลือกอุปกรณ์ที่จะเบิก (Multi-select)**")
+            df_pick = STOCK[["item_code","item_name","category","unit","qty","min_qty"]].copy()
+            pick = st.multiselect(
+                "ค้นหา/เลือก",
+                options=list(df_pick.index),
+                format_func=lambda idx: f"{df_pick.at[idx,'item_code']} | {df_pick.at[idx,'item_name']} ({df_pick.at[idx,'qty']})",
             )
-            df_f = df_f[mask_q]
-    else:
-        df_f = pd.DataFrame(columns=TXNS_HEADERS)
+            qty_inputs = {}
+            if pick:
+                st.write("**กำหนดจำนวนที่จะเบิก**")
+                for idx in pick:
+                    row = df_pick.loc[idx]
+                    maxq = to_int(row["qty"], 0)
+                    qty = st.number_input(
+                        f"{row['item_code']} | {row['item_name']} (คงเหลือ {maxq})",
+                        min_value=0, max_value=max(0, maxq), step=1, value=0, key=f"qty_{idx}"
+                    )
+                    qty_inputs[idx] = qty
 
-    if not tickets.empty:
-        tdf = tickets.copy()
-        tdf["วันที่แจ้ง"] = pd.to_datetime(tdf["วันที่แจ้ง"], errors="coerce")
-        tdf = tdf.dropna(subset=["วันที่แจ้ง"])
-        tdf = tdf[(tdf["วันที่แจ้ง"].dt.date >= d1) & (tdf["วันที่แจ้ง"].dt.date <= d2)]
-        if q:
-            mask_t = (
-                (tdf["รายละเอียด"].astype(str).str.contains(q, case=False, na=False)) |
-                (tdf["สาขา"].astype(str).str.contains(q, case=False, na=False)) |
-                (tdf["ผู้แจ้ง"].astype(str).str.contains(q, case=False, na=False))
-            )
-            if "เรื่อง" in tdf.columns:
-                mask_t = mask_t | tdf["เรื่อง"].astype(str).str.contains(q, case=False, na=False)
-            tdf = tdf[mask_t]
-        if "เรื่อง" not in tdf.columns:
-            def _derive_subject(x):
-                s = str(x or "").strip().splitlines()[0]
-                return s[:60] if s else "ไม่ระบุเรื่อง"
-            tdf["เรื่อง"] = tdf["รายละเอียด"].apply(_derive_subject)
-    else:
-        tdf = pd.DataFrame(columns=TICKETS_HEADERS + ["เรื่อง"])
+            if st.button("✅ ยืนยันการเบิก (OUT)"):
+                if not pick:
+                    st.warning("ยังไม่ได้เลือกรายการ")
+                elif not requester.strip():
+                    st.warning("กรุณากรอกชื่อผู้เบิก")
+                else:
+                    # บันทึก OUT และหักสต็อก
+                    out_df = OUTS.copy()
+                    stock_df = STOCK.copy()
+                    new_rows = []
+                    for idx in pick:
+                        q = to_int(qty_inputs.get(idx, 0), 0)
+                        if q <= 0: 
+                            continue
+                        srow = stock_df.loc[idx]
+                        cur = to_int(srow["qty"], 0)
+                        new_qty = max(0, cur - q)
+                        stock_df.at[idx, "qty"] = str(new_qty)
+                        new_rows.append({
+                            "run": f"OUT-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}",
+                            "date": now_str(),
+                            "branch_code": sel_branch,
+                            "branch_name": code_to_name(sel_branch),
+                            "requester": requester,
+                            "item_code": srow["item_code"],
+                            "item_name": srow["item_name"],
+                            "qty": str(q),
+                            "unit": srow.get("unit",""),
+                            "note": note,
+                            "status": "DONE",
+                        })
+                    if new_rows:
+                        out_df = pd.concat([out_df, pd.DataFrame(new_rows)], ignore_index=True)
+                        # save
+                        st.session_state["tables"] = (stock_df, out_df, INS, USERS, CATS)
+                        write_table("stock", stock_df)
+                        write_table("out", out_df)
+                        st.success(f"บันทึก OUT {len(new_rows)} รายการสำเร็จ ✅")
 
-    tOut, tTickets, tW, tM, tY = st.tabs(["รายละเอียดการเบิก (OUT)", "ประวัติการแจ้งปัญหา", "รายสัปดาห์", "รายเดือน", "รายปี"])
+    with tab_in:
+        st.caption("รับเข้า/เพิ่มสต็อก (IN) จากการซื้อใหม่หรือคืนของ")
+        left, right = st.columns([1,1])
+        with left:
+            branches = list(CFG["branch_code_name"].keys())
+            sel_branch = st.selectbox("เลือกสาขา", options=branches, format_func=lambda c: f"{c} - {code_to_name(c)}", key="in_branch")
+            receiver = st.text_input("ผู้รับเข้า", "", key="in_receiver")
+            note = st.text_input("หมายเหตุ (ถ้ามี)", "", key="in_note")
+        with right:
+            # เลือกอุปกรณ์ 1 รายการ + จำนวน (ง่ายๆ)
+            # ถ้าต้องการ IN หลายชิ้นในครั้งเดียว สามารถต่อยอดโดย copy แนวคิดแบบ OUT ด้านบน
+            df_pick = STOCK[["item_code","item_name","unit","qty"]].copy()
+            idx = st.selectbox("เลือกรายการ", options=list(df_pick.index),
+                               format_func=lambda i: f"{df_pick.at[i,'item_code']} | {df_pick.at[i,'item_name']} (คงเหลือ {df_pick.at[i,'qty']})")
+            in_qty = st.number_input("จำนวนรับเข้า", min_value=0, step=1, value=0)
+            if st.button("✅ ยืนยันการรับเข้า (IN)"):
+                if in_qty <= 0:
+                    st.warning("กรุณากรอกจำนวนที่จะรับเข้า")
+                elif not receiver.strip():
+                    st.warning("กรุณากรอกชื่อผู้รับเข้า")
+                else:
+                    stock_df = STOCK.copy()
+                    in_df = INS.copy()
+                    srow = stock_df.loc[idx]
+                    cur = to_int(srow["qty"], 0)
+                    stock_df.at[idx, "qty"] = str(cur + int(in_qty))
+                    new_row = {
+                        "run": f"IN-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}",
+                        "date": now_str(),
+                        "branch_code": sel_branch,
+                        "branch_name": code_to_name(sel_branch),
+                        "receiver": receiver,
+                        "item_code": srow["item_code"],
+                        "item_name": srow["item_name"],
+                        "qty": str(int(in_qty)),
+                        "unit": srow.get("unit",""),
+                        "note": note,
+                        "ref_out_run": "",
+                    }
+                    in_df = pd.concat([in_df, pd.DataFrame([new_row])], ignore_index=True)
+                    st.session_state["tables"] = (stock_df, OUTS, in_df, USERS, CATS)
+                    write_table("stock", stock_df)
+                    write_table("in", in_df)
+                    st.success("รับเข้าเรียบร้อย ✅")
 
-    with tOut:
-        out_df = df_f[df_f["ประเภท"] == "OUT"].copy().sort_values("วันเวลา", ascending=False)
-        cols = [c for c in ["วันเวลา", "ชื่ออุปกรณ์", "จำนวน", "สาขา", "ผู้ดำเนินการ", "หมายเหตุ", "รหัส"] if c in out_df.columns]
-        st.dataframe(out_df[cols], height=320, use_container_width=True)
+def page_reports():
+    section_title("รายงาน (PDF ไทย + โลโก้)", "🧷")
+    st.info("ออกรายงานเป็นไฟล์ PDF รองรับภาษาไทย (ควรติดตั้งฟอนต์ TH Sarabun หรือ Noto Sans Thai ไว้ใน ./fonts)")
 
-    with tTickets:
-        st.markdown("#### ตารางรายการแจ้งปัญหา")
-        show_cols = [c for c in ["วันที่แจ้ง","เรื่อง","รายละเอียด","สาขา","ผู้แจ้ง","สถานะ","ผู้รับผิดชอบ","หมายเหตุ","TicketID"] if c in tdf.columns]
-        tdf_sorted = tdf.sort_values("วันที่แจ้ง", ascending=False)
-        st.dataframe(tdf_sorted[show_cols], height=320, use_container_width=True)
+    report_type = st.selectbox("ประเภท", ["ภาพรวมสต็อก", "ประวัติการเบิก (ล่าสุด)", "ประวัติการรับเข้า (ล่าสุด)"])
+    limit = st.number_input("จำนวนแถวสูงสุด", min_value=10, max_value=1000, value=200, step=10)
 
-    def group_period(df, period="ME"):
-        dfx = df.copy()
-        dfx["วันเวลา"] = pd.to_datetime(dfx["วันเวลา"], errors='coerce')
-        dfx = dfx.dropna(subset=["วันเวลา"])
-        return dfx.groupby([pd.Grouper(key="วันเวลา", freq=period), "ประเภท", "ชื่ออุปกรณ์"])["จำนวน"].sum().reset_index()
+    # เลือกโลโก้ (ถ้ามีใน Settings จะดึงอัตโนมัติ)
+    logo_path = CFG.get("logo_path", "")
+    uploaded_logo = st.file_uploader("อัปโหลดโลโก้ (PNG/JPG) — ใช้เฉพาะรายงานนี้", type=["png","jpg","jpeg"])
+    if uploaded_logo is not None:
+        tmp_logo = os.path.join(DEFAULT_ASSETS_DIR, f"logo_tmp_{uuid.uuid4().hex[:6]}.png")
+        with open(tmp_logo, "wb") as f:
+            f.write(uploaded_logo.read())
+        logo_path = tmp_logo
 
-    with tW:
-        g = group_period(df_f, "W")
-        st.dataframe(g, height=220, use_container_width=True)
+    df = pd.DataFrame()
+    title = "รายงาน"
 
-    with tM:
-        g = group_period(df_f, "ME")
-        st.dataframe(g, height=220, use_container_width=True)
+    if report_type == "ภาพรวมสต็อก":
+        df = STOCK.copy().head(limit)
+        title = f"รายงานภาพรวมสต็อก ({len(STOCK):,} รายการ)"
+    elif report_type == "ประวัติการเบิก (ล่าสุด)":
+        df = OUTS.copy().sort_values("date", ascending=False).head(limit)
+        title = f"รายงานประวัติการเบิก (ล่าสุด {len(df):,} รายการ)"
+    elif report_type == "ประวัติการรับเข้า (ล่าสุด)":
+        df = INS.copy().sort_values("date", ascending=False).head(limit)
+        title = f"รายงานประวัติการรับเข้า (ล่าสุด {len(df):,} รายการ)"
 
-    with tY:
-        g = group_period(df_f, "YE")
-        st.dataframe(g, height=220, use_container_width=True)
+    st.dataframe(df, use_container_width=True, height=360)
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    if st.button("🖨️ พิมพ์รายงานเป็น PDF", type="primary"):
+        if not FONTS_READY:
+            st.warning("ยังไม่พบฟอนต์ไทย (TH Sarabun / Noto Sans Thai) ในระบบ/โฟลเดอร์ ./fonts — PDF อาจแสดงเป็นสี่เหลี่ยม ❗")
 
-# -------------------- Import/Modify page --------------------
-def _read_upload_df(file):
-    if file is None: return None, "ยังไม่ได้เลือกไฟล์"
-    name = file.name.lower()
-    try:
-        if name.endswith(".csv"):
-            df = pd.read_csv(file, dtype=str).fillna("")
-        elif name.endswith(".xlsx") or name.endswith(".xls"):
-            df = pd.read_excel(file, dtype=str).fillna("")
+        pdf_bytes = generate_pdf_report(title, df, logo_path=logo_path)
+        st.download_button(
+            "⬇️ ดาวน์โหลด PDF",
+            data=pdf_bytes,
+            file_name=f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            mime="application/pdf",
+        )
+
+def page_import():
+    section_title("นำเข้า/แก้ไข ข้อมูล (หลายแท็บ)", "📥")
+    st.caption("อัปโหลดไฟล์ Excel/CSV เพื่ออัปเดตแท็บต่างๆ เช่น stock, out, in, users, categories")
+    st.write("**ชื่อแท็บ/ชื่อไฟล์ที่รองรับ**: `stock`, `out`, `in`, `users`, `categories`")
+
+    tfile = st.file_uploader("อัปโหลดไฟล์", type=["xlsx","xls","csv"])
+    if tfile is not None:
+        ext = pathlib.Path(tfile.name).suffix.lower()
+        if ext == ".csv":
+            # เลือกชื่อแท็บเอง
+            name = st.selectbox("เลือกว่าเป็นแท็บใด", ["stock","out","in","users","categories"])
+            df = pd.read_csv(tfile).fillna("")
+            st.dataframe(df.head(50), use_container_width=True)
+            if st.button(f"🔄 นำเข้าแท็บ {name}"):
+                # ensure schema
+                schema_map = {"stock":SCHEMA_STOCK, "out":SCHEMA_OUT, "in":SCHEMA_IN, "users":SCHEMA_USERS, "categories":SCHEMA_CATEGORIES}
+                df2 = ensure_columns(df, schema_map[name])[schema_map[name]]
+                # save
+                if name == "stock":
+                    st.session_state["tables"] = (df2, OUTS, INS, USERS, CATS)
+                elif name == "out":
+                    st.session_state["tables"] = (STOCK, df2, INS, USERS, CATS)
+                elif name == "in":
+                    st.session_state["tables"] = (STOCK, OUTS, df2, USERS, CATS)
+                elif name == "users":
+                    st.session_state["tables"] = (STOCK, OUTS, INS, df2, CATS)
+                elif name == "categories":
+                    st.session_state["tables"] = (STOCK, OUTS, INS, USERS, df2)
+                write_table(name, df2)
+                st.success(f"นำเข้าแท็บ {name} เรียบร้อย ✅")
         else:
-            return None, "รองรับเฉพาะ .csv หรือ .xlsx"
-        df = df.applymap(lambda x: str(x).strip())
-        return df, None
-    except Exception as e:
-        return None, f"อ่านไฟล์ไม่สำเร็จ: {e}"
+            # Excel หลายชีท
+            xls = pd.ExcelFile(tfile)
+            for name in xls.sheet_names:
+                if name.lower() not in ["stock","out","in","users","categories"]:
+                    continue
+                df = pd.read_excel(xls, sheet_name=name).fillna("")
+                st.write(f"**แสดงตัวอย่างแท็บ:** `{name}`")
+                st.dataframe(df.head(30), use_container_width=True)
+                if st.button(f"🔄 นำเข้าแท็บ {name}", key=f"imp_{name}"):
+                    schema_map = {"stock":SCHEMA_STOCK, "out":SCHEMA_OUT, "in":SCHEMA_IN, "users":SCHEMA_USERS, "categories":SCHEMA_CATEGORIES}
+                    df2 = ensure_columns(df, schema_map[name])[schema_map[name]]
+                    # save
+                    if name == "stock":
+                        st.session_state["tables"] = (df2, OUTS, INS, USERS, CATS)
+                    elif name == "out":
+                        st.session_state["tables"] = (STOCK, df2, INS, USERS, CATS)
+                    elif name == "in":
+                        st.session_state["tables"] = (STOCK, OUTS, df2, USERS, CATS)
+                    elif name == "users":
+                        st.session_state["tables"] = (STOCK, OUTS, INS, df2, CATS)
+                    elif name == "categories":
+                        st.session_state["tables"] = (STOCK, OUTS, INS, USERS, df2)
+                    write_table(name, df2)
+                    st.success(f"นำเข้าแท็บ {name} เรียบร้อย ✅")
 
-def page_import(sh):
-    st.subheader("นำเข้า/แก้ไข หมวดหมู่ / สาขา / อุปกรณ์ / หมวดหมู่ปัญหา / ผู้ใช้")
-    t1, t2, t3, t4, t5 = st.tabs(["หมวดหมู่","สาขา","อุปกรณ์","หมวดหมู่ปัญหา","ผู้ใช้"])
+def page_users():
+    section_title("ผู้ใช้ (Users)", "👥")
+    st.caption("ตารางผู้ใช้เรียบง่าย (ชื่อ-บทบาท-สาขา)")
+    editable = df_editor(USERS, key="user_editor")
+    if st.button("💾 บันทึกผู้ใช้"):
+        st.session_state["tables"] = (STOCK, OUTS, INS, editable, CATS)
+        write_table("users", editable)
+        st.success("บันทึกเรียบร้อย ✅")
 
-    # หมวดหมู่
-    with t1:
-        up = st.file_uploader("อัปโหลดไฟล์ หมวดหมู่ (CSV/Excel)", type=["csv","xlsx"], key="up_cat")
-        if up:
-            df, err = _read_upload_df(up)
-            if err: st.error(err)
-            else:
-                st.dataframe(df.head(50), height=220, use_container_width=True)
-                if not set(["รหัสหมวด","ชื่อหมวด"]).issubset(df.columns):
-                    st.error("หัวตารางต้องประกอบด้วย: รหัสหมวด, ชื่อหมวด")
-                else:
-                    if st.button("นำเข้า/อัปเดต หมวดหมู่", use_container_width=True, key="btn_imp_cat"):
-                        cur = read_df(sh, SHEET_CATS, CATS_HEADERS)
-                        for _, r in df.iterrows():
-                            code_c = str(r["รหัสหมวด"]).strip()
-                            name_c = str(r["ชื่อหมวด"]).strip()
-                            if code_c == "": continue
-                            if (cur["รหัสหมวด"]==code_c).any():
-                                cur.loc[cur["รหัสหมวด"]==code_c, ["รหัสหมวด","ชื่อหมวด"]] = [code_c, name_c]
-                            else:
-                                cur = pd.concat([cur, pd.DataFrame([[code_c, name_c]], columns=CATS_HEADERS)], ignore_index=True)
-                        write_df(sh, SHEET_CATS, cur); st.success("นำเข้าหมวดหมู่สำเร็จ")
-
-        with st.form("form_add_cat", clear_on_submit=True):
-            col1, col2 = st.columns(2)
-            with col1: code_c = st.text_input("รหัสหมวด*", max_chars=10)
-            with col2: name_c = st.text_input("ชื่อหมวด*")
-            s = st.form_submit_button("เพิ่มหมวดหมู่", use_container_width=True)
-        if s:
-            if not code_c or not name_c: st.warning("กรอกข้อมูลให้ครบ")
-            else:
-                cur = read_df(sh, SHEET_CATS, CATS_HEADERS)
-                if (cur["รหัสหมวด"]==code_c).any(): st.error("มีรหัสนี้อยู่แล้ว")
-                else:
-                    cur = pd.concat([cur, pd.DataFrame([[code_c.strip(), name_c.strip()]], columns=CATS_HEADERS)], ignore_index=True)
-                    write_df(sh, SHEET_CATS, cur); st.success("เพิ่มสำเร็จ")
-
-    # สาขา
-    with t2:
-        up = st.file_uploader("อัปโหลดไฟล์ สาขา (CSV/Excel)", type=["csv","xlsx"], key="up_br")
-        if up:
-            df, err = _read_upload_df(up)
-            if err: st.error(err)
-            else:
-                st.dataframe(df.head(50), height=220, use_container_width=True)
-                if not set(["รหัสสาขา","ชื่อสาขา"]).issubset(df.columns):
-                    st.error("หัวตารางต้องประกอบด้วย: รหัสสาขา, ชื่อสาขา")
-                else:
-                    if st.button("นำเข้า/อัปเดต สาขา", use_container_width=True, key="btn_imp_br"):
-                        cur = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
-                        for _, r in df.iterrows():
-                            code_b = str(r["รหัสสาขา"]).strip()
-                            name_b = str(r["ชื่อสาขา"]).strip()
-                            if code_b == "": continue
-                            if (cur["รหัสสาขา"]==code_b).any():
-                                cur.loc[cur["รหัสสาขา"]==code_b, ["รหัสสาขา","ชื่อสาขา"]] = [code_b, name_b]
-                            else:
-                                cur = pd.concat([cur, pd.DataFrame([[code_b, name_b]], columns=BR_HEADERS)], ignore_index=True)
-                        write_df(sh, SHEET_BRANCHES, cur); st.success("นำเข้าสาขาสำเร็จ")
-
-        with st.form("form_add_branch", clear_on_submit=True):
-            col1, col2 = st.columns(2)
-            with col1: code_b = st.text_input("รหัสสาขา*", max_chars=10)
-            with col2: name_b = st.text_input("ชื่อสาขา*")
-            s2 = st.form_submit_button("เพิ่มสาขา", use_container_width=True)
-        if s2:
-            if not code_b or not name_b: st.warning("กรอกข้อมูลให้ครบ")
-            else:
-                cur = read_df(sh, SHEET_BRANCHES, BR_HEADERS)
-                if (cur["รหัสสาขา"]==code_b).any(): st.error("มีรหัสนี้อยู่แล้ว")
-                else:
-                    cur = pd.concat([cur, pd.DataFrame([[code_b.strip(), name_b.strip()]], columns=BR_HEADERS)], ignore_index=True)
-                    write_df(sh, SHEET_BRANCHES, cur); st.success("เพิ่มสำเร็จ")
-
-    # อุปกรณ์
-    with t3:
-        up = st.file_uploader("อัปโหลดไฟล์ อุปกรณ์ (CSV/Excel)", type=["csv","xlsx"], key="up_it")
-        if up:
-            df, err = _read_upload_df(up)
-            if err: st.error(err)
-            else:
-                st.dataframe(df.head(50), height=260, use_container_width=True)
-                missing_cols = [c for c in ["หมวดหมู่","ชื่ออุปกรณ์","หน่วย","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ"] if c not in df.columns]
-                if missing_cols:
-                    st.error("หัวตารางต้องประกอบด้วยอย่างน้อย: หมวดหมู่, ชื่ออุปกรณ์, หน่วย, คงเหลือ, จุดสั่งซื้อ, ที่เก็บ (รหัส, ใช้งาน เป็นออปชัน)")
-                else:
-                    if st.button("นำเข้า/อัปเดต อุปกรณ์", use_container_width=True, key="btn_imp_items"):
-                        cur = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
-                        cats_df = read_df(sh, SHEET_CATS, CATS_HEADERS)
-                        valid_cats = set(cats_df["รหัสหมวด"].tolist()) if not cats_df.empty else set()
-                        errs=[]; add=0; upd=0; seen=set()
-                        for i, r in df.iterrows():
-                            code_i = str(r.get("รหัส","")).strip().upper()
-                            cat  = str(r.get("หมวดหมู่","")).strip()
-                            name = str(r.get("ชื่ออุปกรณ์","")).strip()
-                            unit = str(r.get("หน่วย","")).strip()
-                            qty  = str(r.get("คงเหลือ","")).strip()
-                            rop  = str(r.get("จุดสั่งซื้อ","")).strip()
-                            loc  = str(r.get("ที่เก็บ","")).strip()
-                            active = str(r.get("ใช้งาน","Y")).strip().upper() or "Y"
-                            if name=="" or unit=="":
-                                errs.append({"row":i+1,"error":"ชื่อ/หน่วย ว่าง"}); continue
-                            if cat not in valid_cats:
-                                errs.append({"row":i+1,"error":"หมวดไม่มีในระบบ","cat":cat}); continue
-                            try: qty = int(float(qty))
-                            except: qty = 0
-                            try: rop = int(float(rop))
-                            except: rop = 0
-                            qty = max(0, qty); rop = max(0, rop)
-                            if code_i=="": code_i = generate_item_code(sh, cat)
-                            if code_i in seen: errs.append({"row":i+1,"error":"รหัสซ้ำในไฟล์/ตาราง","code":code_i}); continue
-                            seen.add(code_i)
-                            if (cur["รหัส"]==code_i).any():
-                                cur.loc[cur["รหัส"]==code_i, ITEMS_HEADERS] = [code_i, cat, name, unit, qty, rop, loc, active]; upd+=1
-                            else:
-                                cur = pd.concat([cur, pd.DataFrame([[code_i, cat, name, unit, qty, rop, loc, active]], columns=ITEMS_HEADERS)], ignore_index=True); add+=1
-                        write_df(sh, SHEET_ITEMS, cur)
-                        st.success(f"เพิ่ม {add} ราย / อัปเดต {upd} ราย")
-                        if errs: st.warning(pd.DataFrame(errs))
-
-    # หมวดหมู่ปัญหา
-    with t4:
-        up = st.file_uploader("อัปโหลดไฟล์ หมวดหมู่ปัญหา (CSV/Excel)", type=["csv","xlsx"], key="up_tkc")
-        if up:
-            df, err = _read_upload_df(up)
-            if err: st.error(err)
-            else:
-                st.dataframe(df.head(50), height=220, use_container_width=True)
-                if not set(["รหัสหมวดปัญหา","ชื่อหมวดปัญหา"]).issubset(df.columns):
-                    st.error("หัวตารางต้องประกอบด้วย: รหัสหมวดปัญหา, ชื่อหมวดปัญหา")
-                else:
-                    if st.button("นำเข้า/อัปเดต หมวดหมู่ปัญหา", use_container_width=True, key="btn_imp_tkc"):
-                        cur = read_df(sh, SHEET_TICKET_CATS, TICKET_CAT_HEADERS)
-                        for _, r in df.iterrows():
-                            code_t = str(r["รหัสหมวดปัญหา"]).strip()
-                            name_t = str(r["ชื่อหมวดปัญหา"]).strip()
-                            if code_t == "": continue
-                            if (cur["รหัสหมวดปัญหา"]==code_t).any():
-                                cur.loc[cur["รหัสหมวดปัญหา"]==code_t, ["รหัสหมวดปัญหา","ชื่อหมวดปัญหา"]] = [code_t, name_t]
-                            else:
-                                cur = pd.concat([cur, pd.DataFrame([[code_t, name_t]], columns=TICKET_CAT_HEADERS)], ignore_index=True)
-                        write_df(sh, SHEET_TICKET_CATS, cur); st.success("นำเข้าหมวดหมู่ปัญหาสำเร็จ")
-
-    # ผู้ใช้
-    with t5:
-        up = st.file_uploader("อัปโหลดไฟล์ ผู้ใช้ (CSV/Excel)", type=["csv","xlsx"], key="up_users")
-        if up:
-            df, err = _read_upload_df(up)
-            if err: st.error(err)
-            else:
-                st.dataframe(df.head(50), height=220, use_container_width=True)
-                if "Username" not in df.columns:
-                    st.error("หัวตารางอย่างน้อยต้องมีคอลัมน์ Username")
-                else:
-                    if st.button("นำเข้า/อัปเดต ผู้ใช้", use_container_width=True, key="btn_imp_users"):
-                        cur = read_df(sh, SHEET_USERS, USERS_HEADERS)
-                        for c in USERS_HEADERS:
-                            if c not in cur.columns: cur[c] = ""
-                        cur = cur[USERS_HEADERS].fillna("")
-                        add=upd=0; errs=[]
-                        for i, r in df.iterrows():
-                            username = str(r.get("Username","")).strip()
-                            if username=="":
-                                errs.append({"row":i+1,"error":"เว้นว่าง Username"}); 
-                                continue
-                            display = str(r.get("DisplayName","")).strip()
-                            role    = str(r.get("Role","staff")).strip() or "staff"
-                            active  = str(r.get("Active","Y")).strip() or "Y"
-                            pwd_hash = None
-                            plain = str(r.get("Password","")).strip() if "Password" in df.columns else ""
-                            if plain:
-                                try:
-                                    pwd_hash = bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt(12)).decode("utf-8")
-                                except Exception as e:
-                                    errs.append({"row":i+1,"error":f"แฮชรหัสผ่านไม่สำเร็จ: {e}","Username":username}); 
-                                    continue
-                            else:
-                                if "PasswordHash" in df.columns:
-                                    ph = str(r.get("PasswordHash","")).strip()
-                                    if ph: pwd_hash = ph
-                            if (cur["Username"]==username).any():
-                                idx = cur.index[cur["Username"]==username][0]
-                                cur.at[idx,"DisplayName"]=display
-                                cur.at[idx,"Role"]=role
-                                cur.at[idx,"Active"]=active
-                                if pwd_hash: cur.at[idx,"PasswordHash"]=pwd_hash
-                                upd+=1
-                            else:
-                                if not pwd_hash:
-                                    errs.append({"row":i+1,"error":"ผู้ใช้ใหม่ต้องระบุ Password หรือ PasswordHash","Username":username}); 
-                                    continue
-                                new_row = pd.DataFrame([{
-                                    "Username": username,
-                                    "DisplayName": display,
-                                    "Role": role,
-                                    "PasswordHash": pwd_hash,
-                                    "Active": active,
-                                }])
-                                cur = pd.concat([cur, new_row], ignore_index=True); add+=1
-                        write_df(sh, SHEET_USERS, cur)
-                        st.success(f"เพิ่ม {add} ราย / อัปเดต {upd} ราย")
-                        if errs: st.warning(pd.DataFrame(errs))
-
-        st.markdown("##### เทมเพลตไฟล์")
-        tpl = "Username,DisplayName,Role,Active,Password\nuser001,คุณเอ,staff,Y,1234\n"
-        st.download_button("เทมเพลต ผู้ใช้ (CSV)", data=tpl.encode("utf-8-sig"),
-                           file_name="template_users.csv", mime="text/csv", use_container_width=True)
-
-# -------------------- Users page (select row to edit) --------------------
-def page_users(sh):
-    st.subheader("👥 ผู้ใช้ & สิทธิ์ (Admin)")
-    users = read_df(sh, SHEET_USERS, USERS_HEADERS)
-    for c in USERS_HEADERS:
-        if c not in users.columns: users[c] = ""
-    users = users[USERS_HEADERS].fillna("")
-
-    st.markdown("#### 📋 รายชื่อผู้ใช้ (ติ๊ก 'เลือก' เพื่อแก้ไข)")
-    chosen_username = None
-    if hasattr(st, "data_editor"):
-        users_display = users.copy()
-        users_display["เลือก"] = False
-        edited_table = st.data_editor(
-            users_display[["เลือก","Username","DisplayName","Role","PasswordHash","Active"]],
-            use_container_width=True, height=300, num_rows="fixed",
-            column_config={"เลือก": st.column_config.CheckboxColumn(help="ติ๊กเพื่อเลือกผู้ใช้สำหรับแก้ไข")}
-        )
-        picked = edited_table[edited_table["เลือก"] == True]
-        if not picked.empty:
-            chosen_username = str(picked.iloc[0]["Username"])
-    else:
-        st.dataframe(users, use_container_width=True, height=300)
-
-    tab_add, tab_edit = st.tabs(["➕ เพิ่มผู้ใช้", "✏️ แก้ไขผู้ใช้"])
-
-    with tab_add:
-        with st.form("form_add_user", clear_on_submit=True):
-            c1, c2 = st.columns([2,1])
-            with c1:
-                new_user = st.text_input("Username*")
-                new_disp = st.text_input("Display Name")
-            with c2:
-                new_role = st.selectbox("Role", ["admin","staff","viewer"], index=1)
-                new_active = st.selectbox("Active", ["Y","N"], index=0)
-            new_pwd = st.text_input("กำหนดรหัสผ่าน*", type="password")
-            btn_add = st.form_submit_button("บันทึกผู้ใช้ใหม่", use_container_width=True, type="primary")
-
-        if btn_add:
-            if not new_user.strip() or not new_pwd.strip():
-                st.warning("กรุณากรอก Username และรหัสผ่าน"); st.stop()
-            if (users["Username"] == new_user).any():
-                st.error("มี Username นี้อยู่แล้ว"); st.stop()
-            ph = bcrypt.hashpw(new_pwd.encode("utf-8"), bcrypt.gensalt(12)).decode("utf-8")
-            new_row = pd.DataFrame([{
-                "Username": new_user.strip(),
-                "DisplayName": new_disp.strip(),
-                "Role": new_role,
-                "PasswordHash": ph,
-                "Active": new_active,
-            }])
-            users2 = pd.concat([users, new_row], ignore_index=True)
-            try:
-                write_df(sh, SHEET_USERS, users2)
-                st.success("เพิ่มผู้ใช้สำเร็จ"); st.rerun()
-            except Exception as e:
-                st.error(f"เพิ่มผู้ใช้ไม่สำเร็จ: {e}")
-
-    with tab_edit:
-        default_user = st.session_state.get("edit_user","")
-        if chosen_username:
-            st.session_state["edit_user"] = chosen_username
-            default_user = chosen_username
-
-        sel = st.selectbox(
-            "เลือกผู้ใช้เพื่อแก้ไข",
-            [""] + users["Username"].tolist(),
-            index=([""] + users["Username"].tolist()).index(default_user) if default_user in users["Username"].tolist() else 0
-        )
-
-        target_user = sel or ""
-        if not target_user:
-            st.info("ยังไม่ได้เลือกผู้ใช้สำหรับแก้ไข"); return
-
-        row = users[users["Username"] == target_user]
-        if row.empty:
-            st.warning("ไม่พบผู้ใช้ที่เลือก"); return
-        data = row.iloc[0].to_dict()
-
-        with st.form("form_edit_user", clear_on_submit=False):
-            c1, c2 = st.columns([2,1])
-            with c1:
-                username = st.text_input("Username", value=data["Username"], disabled=True)
-                display  = st.text_input("Display Name", value=data["DisplayName"])
-            with c2:
-                role  = st.selectbox("Role", ["admin","staff","viewer"],
-                                     index=["admin","staff","viewer"].index(data["Role"]) if data["Role"] in ["admin","staff","viewer"] else 1)
-                active = st.selectbox("Active", ["Y","N"],
-                                      index=["Y","N"].index(data["Active"]) if data["Active"] in ["Y","N"] else 0)
-            pwd = st.text_input("ตั้ง/รีเซ็ตรหัสผ่าน (ปล่อยว่าง = ไม่เปลี่ยน)", type="password")
-
-            c3, c4 = st.columns([1,1])
-            btn_save = c3.form_submit_button("บันทึกการแก้ไข", use_container_width=True, type="primary")
-            btn_del  = c4.form_submit_button("ลบผู้ใช้นี้", use_container_width=True)
-
-        if btn_del:
-            if username.lower() == "admin":
-                st.error("ห้ามลบผู้ใช้ admin")
-            else:
-                users2 = users[users["Username"] != username]
-                try:
-                    write_df(sh, SHEET_USERS, users2)
-                    st.success(f"ลบผู้ใช้ {username} แล้ว")
-                    st.session_state.pop("edit_user", None)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"ลบไม่สำเร็จ: {e}")
-
-        if btn_save:
-            idx = users.index[users["Username"] == username][0]
-            users.at[idx, "DisplayName"] = display
-            users.at[idx, "Role"]        = role
-            users.at[idx, "Active"]      = active
-            if pwd.strip():
-                ph = bcrypt.hashpw(pwd.encode("utf-8"), bcrypt.gensalt(12)).decode("utf-8")
-                users.at[idx, "PasswordHash"] = ph
-
-            try:
-                write_df(sh, SHEET_USERS, users)
-                st.success("บันทึกการแก้ไขเรียบร้อย")
-                st.rerun()
-            except Exception as e:
-                st.error(f"บันทึกไม่สำเร็จ: {e}")
-
-# -------------------- Settings --------------------
 def page_settings():
-    st.markdown("<div class='block-card'>", unsafe_allow_html=True)
-    st.subheader("⚙️ Settings"); st.caption("ตรวจสอบว่าได้แชร์ Google Sheet ให้ service account แล้ว")
-    url = st.text_input("Google Sheet URL", value=st.session_state.get("sheet_url", DEFAULT_SHEET_URL))
-    st.session_state["sheet_url"] = url
-    if st.button("ทดสอบเชื่อมต่อ/ตรวจสอบชีตที่จำเป็น", use_container_width=True):
-        try:
-            sh = open_sheet_by_url(url); ensure_sheets_exist(sh); st.success("เชื่อมต่อสำเร็จ พร้อมใช้งาน")
-        except Exception as e:
-            st.error(f"เชื่อมต่อไม่สำเร็จ: {e}")
+    section_title("Settings", "⚙️")
+    tabs = st.tabs(["Google Sheets", "Fonts/PDF", "Logo", "Branches", "Tools"])
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    with tabs[0]:
+        st.checkbox("ใช้ Google Sheets แทน CSV (ต้องตั้งค่าให้ครบ)", key="use_gs_tmp", value=CFG["use_gsheets"])
+        sheet_url = st.text_input("Sheet URL", value=CFG.get("sheet_url",""))
+        st.caption("รูปแบบ URL: https://docs.google.com/spreadsheets/d/xxxxxxx/edit#gid=0")
 
-# -------------------- Main --------------------
-def main():
-    st.set_page_config(page_title=APP_TITLE, page_icon="🧰", layout="wide")
-    st.markdown(MINIMAL_CSS, unsafe_allow_html=True)
-    st.title(APP_TITLE); st.caption(APP_TAGLINE)
-    setup_responsive()
+        up_json = st.file_uploader("อัปโหลด Service Account JSON (ทางเลือกที่ 1)", type=["json"], key="sa_json")
+        if up_json is not None:
+            CFG["service_account_json_text"] = up_json.read().decode("utf-8")
+            st.success("โหลด JSON (in-memory) สำเร็จ")
 
-    ensure_credentials_ui()
-    if "sheet_url" not in st.session_state or not st.session_state.get("sheet_url"):
-        st.session_state["sheet_url"] = DEFAULT_SHEET_URL
+        json_file_path = st.text_input("หรือ ใส่ path ไฟล์ JSON บนเครื่องเซิร์ฟเวอร์ (ทางเลือกที่ 2)", value=CFG.get("service_account_json_file",""))
 
-    with st.sidebar:
-        st.markdown("---")
-        page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
+        if st.button("💾 บันทึกการตั้งค่า GSheets"):
+            CFG["use_gsheets"] = bool(st.session_state.get("use_gs_tmp", False))
+            CFG["sheet_url"] = sheet_url.strip()
+            CFG["service_account_json_file"] = json_file_path.strip()
+            st.success("บันทึกแล้ว ✅")
 
-    sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
-    if not sheet_url:
-        st.info("ไปที่เมนู **Settings** แล้ววาง Google Sheet URL ที่คุณเป็นเจ้าของ จากนั้นกดปุ่มทดสอบเชื่อมต่อ"); return
-    try:
-        sh = open_sheet_by_url(sheet_url)
-    except Exception as e:
-        st.error(f"เปิดชีตไม่สำเร็จ: {e}"); return
-    ensure_sheets_exist(sh)
+        if not GS_AVAILABLE:
+            st.warning("ยังไม่ได้ติดตั้งไลบรารี gspread / google-auth — โปรดติดตั้งจาก requirements.txt")
 
-    auth_block(sh)
+    with tabs[1]:
+        st.caption("ตั้งค่าโฟนต์ไทย (PDF) — หากปล่อยว่าง ระบบจะพยายามค้นหาให้อัตโนมัติ")
+        f_reg = st.text_input("Regular TTF path", value=CFG.get("pdf_font_regular",""))
+        f_bold = st.text_input("Bold TTF path", value=CFG.get("pdf_font_bold",""))
+        if st.button("💾 บันทึกฟอนต์ PDF"):
+            CFG["pdf_font_regular"] = f_reg.strip()
+            CFG["pdf_font_bold"] = f_bold.strip()
+            st.success("บันทึกแล้ว ✅")
 
-    if page.startswith("📊"): page_dashboard(sh)
-    elif page.startswith("📦"): page_stock(sh)
-    elif page.startswith("🛠️"): page_tickets(sh)
-    elif page.startswith("🧾"): page_issue_receive(sh)
-    elif page.startswith("📑"): page_reports(sh)
-    elif page.startswith("👤"): page_users(sh)
-    elif page.startswith("นำเข้า"): page_import(sh)
-    elif page.startswith("⚙️"): page_settings()
+        if FONTS_READY:
+            st.success("พบฟอนต์ไทยและพร้อมใช้งานสำหรับ PDF ✅")
+        else:
+            st.warning("ยังไม่พบฟอนต์ไทยสำหรับ PDF — ให้วางไฟล์ .ttf ในโฟลเดอร์ ./fonts (เช่น NotoSansThai-Regular.ttf)")
 
-    st.caption("© 2025 IT Stock · Streamlit + Google Sheets By AOD. · **iTao iT (V.1.1)**")
+    with tabs[2]:
+        st.caption("กำหนดโลโก้สำหรับรายงาน PDF และส่วนหัวต่างๆ")
+        lp = st.text_input("Logo Path (เช่น ./assets/logo.png)", value=CFG.get("logo_path",""))
+        up = st.file_uploader("หรืออัปโหลดไฟล์โลโก้", type=["png","jpg","jpeg"])
+        if up is not None:
+            path = os.path.join(DEFAULT_ASSETS_DIR, f"logo_{uuid.uuid4().hex[:6]}.png")
+            with open(path, "wb") as f:
+                f.write(up.read())
+            lp = path
+        if st.button("💾 บันทึกโลโก้"):
+            CFG["logo_path"] = lp.strip()
+            st.success("บันทึกแล้ว ✅")
 
-if __name__ == "__main__":
-    main()
+    with tabs[3]:
+        st.caption("กำหนดรายชื่อสาขา (โค้ด → ชื่อ)")
+        # แปลงเป็น DataFrame เพื่อแก้ไขสะดวก
+        bm = CFG["branch_code_name"]
+        df = pd.DataFrame([{"branch_code":k, "branch_name":v} for k,v in bm.items()])
+        df2 = st.data_editor(df, hide_index=True, num_rows="dynamic", use_container_width=True)
+        if st.button("💾 บันทึกสาขา"):
+            CFG["branch_code_name"] = {r["branch_code"]: r["branch_name"] for _, r in df2.iterrows() if r["branch_code"]}
+            st.success("บันทึกแล้ว ✅")
+
+    with tabs[4]:
+        st.caption("เครื่องมือผู้ดูแล")
+        if st.button("🧹 ล้างข้อมูลทดลอง (เฉพาะ CSV)"):
+            for name in ["stock","out","in","users","categories"]:
+                path = os.path.join(DEFAULT_DATA_DIR, f"{name}.csv")
+                if os.path.exists(path):
+                    os.remove(path)
+            st.session_state["tables"] = load_all_tables()
+            st.success("ล้างข้อมูล CSV เรียบร้อย")
+
+# =======================================================
+# Navigation
+# =======================================================
+PAGES = {
+    "Dashboard": page_dashboard,
+    "คลังอุปกรณ์": page_stock,
+    "เบิก/รับ": page_out_in,
+    "รายงาน": page_reports,
+    "นำเข้า": page_import,
+    "ผู้ใช้": page_users,
+    "Settings": page_settings,
+}
+
+# Sidebar
+with st.sidebar:
+    st.markdown(f"### 🧰 IT Stock {APP_VERSION}")
+    if CFG.get("logo_path") and os.path.exists(CFG["logo_path"]):
+        st.image(CFG["logo_path"], use_container_width=True)
+    choice = st.radio("เมนู", list(PAGES.keys()), index=0)
+    st.caption("Tip: ใช้ Google Sheets ได้ใน Settings → Google Sheets")
+
+# Run Page
+PAGES[choice]()
