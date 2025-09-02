@@ -1699,10 +1699,6 @@ def main():
     with st.sidebar:
         st.markdown("---")
         page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","🧺 คำขอเบิก","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
-    # PATCH: Early route to Requests page (no local variables)
-    if isinstance(page, str) and (page == MENU_REQUESTS or page.startswith("🧺")) and callable(globals().get("__it_request_page__")):
-        globals()["__it_request_page__"](sh)
-        return
 
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
     if not sheet_url:
@@ -1713,25 +1709,19 @@ def main():
         st.error(f"เปิดชีตไม่สำเร็จ: {e}"); return
     ensure_sheets_exist(sh)
 
-    # PATCH: ensure Requests/Notifications sheets
-    try:
-        ensure_requests_notifs_sheets(sh)
-    except Exception:
-        pass
-
     auth_block(sh)
 
     if page.startswith("📊"): page_dashboard(sh)
     elif page.startswith("📦"): page_stock(sh)
     elif page.startswith("🛠️"): page_tickets(sh)
     elif page.startswith("🧾"): page_issue_receive(sh)
+    elif page.startswith("🧺"): __it_request_page__(sh)
     elif page.startswith("📑"): page_reports(sh)
     elif page.startswith("👤"): page_users(sh)
     elif page.startswith("นำเข้า"): page_import(sh)
     elif page.startswith("⚙️"): page_settings()
 
     st.caption("© 2025 IT Stock · Streamlit + Google Sheets By AOD. · **iTao iT (V.1.1)**")
-
 
 
 # === PATCH: Requests helpers & page (unique name) ===
@@ -1868,7 +1858,6 @@ def __it_request_page__(sh):
         _append_notifications(sh, cur, "คำขอถูกปฏิเสธ")
         st.warning("ปฏิเสธแล้ว"); st.experimental_rerun()
 # === END PATCH ===
-
 
 
 if __name__ == "__main__":
