@@ -36,13 +36,13 @@ SHEET_CATS        = "Categories"
 SHEET_BRANCHES    = "Branches"
 SHEET_TICKETS     = "Tickets"
 SHEET_TICKET_CATS = "TicketCategories"
-
-MENU_REQUESTS   = "🧺 คำขอเบิก"
-SHEET_REQUESTS  = "Requests"
-SHEET_NOTIFS    = "Notifications"
-
-REQUESTS_HEADERS = ["Branch","Requester","CreatedAt","OrderNo","ItemCode","ItemName","Qty","Status","Approver","LastUpdate","Note"]
-NOTIFS_HEADERS   = ["NotiID","CreatedAt","TargetApp","TargetBranch","Type","RefID","Message","ReadFlag","ReadAt"]
+# --- PATCH: Requests integration constants ---
+SHEET_REQUESTS    = "Requests"
+SHEET_NOTIFS      = "Notifications"
+MENU_REQUESTS     = "🧺 คำขอเบิก"
+REQUESTS_HEADERS  = ["Branch","Requester","CreatedAt","OrderNo","ItemCode","ItemName","Qty","Status","Approver","LastUpdate","Note"]
+NOTIFS_HEADERS    = ["NotiID","CreatedAt","TargetApp","TargetBranch","Type","RefID","Message","ReadFlag","ReadAt"]
+# --- END PATCH ---
 
 
 ITEMS_HEADERS     = ["รหัส","หมวดหมู่","ชื่ออุปกรณ์","หน่วย","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ","ใช้งาน"]
@@ -273,9 +273,9 @@ def ensure_sheets_exist(sh):
         (SHEET_BRANCHES, BR_HEADERS, 200, len(BR_HEADERS)+2),
         (SHEET_TICKETS, TICKETS_HEADERS, 1000, len(TICKETS_HEADERS)+5),
         (SHEET_TICKET_CATS, TICKET_CAT_HEADERS, 200, len(TICKET_CAT_HEADERS)+2),
-            (SHEET_REQUESTS, REQUESTS_HEADERS, 1000, len(REQUESTS_HEADERS)+5),
+        (SHEET_REQUESTS, REQUESTS_HEADERS, 2000, len(REQUESTS_HEADERS)+5),
         (SHEET_NOTIFS,   NOTIFS_HEADERS,   1000, len(NOTIFS_HEADERS)+5),
-]
+    ]
 
     try:
         titles = [ws.title for ws in sh.worksheets()]
@@ -984,6 +984,118 @@ def page_issue_receive(sh):
             ok = adjust_stock(sh, code, qty, st.session_state.get("user","unknown"), branch, note, "IN", ts_str=ts_str)
             if ok: st.success("บันทึกรับเข้าแล้ว"); st.rerun()
 
+
+# -------------------- Requests Approval page (PATCH) --------------------
+def page_requests(sh):
+    import pandas as pd
+    st.markdown("<div class='block-card'>", unsafe_allow_html=True)
+    st.subheader("🧺 คำขอเบิก (จากสาขา)")
+
+    reqs = read_df(sh, SHEET_REQUESTS, REQUESTS_HEADERS)
+    if reqs.empty:
+        st.info("ยังไม่มีคำขอเบิกจากสาขา"); st.markdown("</div>", unsafe_allow_html=True); return
+
+    reqs = reqs.fillna("")
+    # รับทั้งสถานะว่างและ PENDING
+    pending = reqs[(reqs["Status"]=="") | (reqs["Status"].str.upper()=="PENDING")].copy()
+    if pending.empty:
+        st.success("ไม่มีคำขอที่รออนุมัติ"); st.markdown("</div>", unsafe_allow_html=True); return
+
+    order_nos = pending["OrderNo"].dropna().unique().tolist()
+    order = st.selectbox("เลือก OrderNo", order_nos)
+    cur = pending[pending["OrderNo"]==order]
+    if cur.empty:
+        st.warning("ไม่พบรายการในคำขอนี้"); st.markdown("</div>", unsafe_allow_html=True); return
+
+    b = cur["Branch"].iloc[0] if "Branch" in cur.columns else ""
+    r = cur["Requester"].iloc[0] if "Requester" in cur.columns else ""
+    st.write(f"**สาขา:** {b}  |  **ผู้ขอ:** {r}")
+    st.dataframe(cur[["ItemCode","ItemName","Qty"]], use_container_width=True, hide_index=True)
+
+    c1, c2 = st.columns(2)
+    if c1.button("✅ อนุมัติและตัดสต็อก", use_container_width=True):
+        errors = []
+        for _, row in cur.iterrows():
+            try:
+                code = str(row["ItemCode"]).strip()
+                qty  = int(float(row["Qty"]))
+                if qty <= 0 or not code: 
+                    continue
+                ok = adjust_stock(
+                    sh, code, -qty,
+                    actor=st.session_state.get("user","system"),
+                    branch=b, note=f"Request {order}", txn_type="OUT"
+                )
+                if not ok: 
+                    errors.append(f"{code}: สต็อกไม่พอหรือไม่พบรหัส")
+            except Exception as e:
+                errors.append(f"{row.get('ItemCode','?')}: {e}")
+        # อัปเดตสถานะ
+        reqs_all = read_df(sh, SHEET_REQUESTS, REQUESTS_HEADERS).fillna("")
+        mask = (reqs_all["OrderNo"]==order)
+        if "Status" in reqs_all.columns:
+            reqs_all.loc[mask, "Status"] = "FULFILLED" if not errors else "PARTIAL"
+        if "Approver" in reqs_all.columns:
+            reqs_all.loc[mask, "Approver"] = st.session_state.get("user","system")
+        if "LastUpdate" in reqs_all.columns:
+            reqs_all.loc[mask, "LastUpdate"] = get_now_str()
+        write_df(sh, SHEET_REQUESTS, reqs_all)
+        # แจ้งเตือน
+        try:
+            notis = read_df(sh, SHEET_NOTIFS, NOTIFS_HEADERS)
+            new = pd.DataFrame([{
+                "NotiID": str(uuid.uuid4())[:8],
+                "CreatedAt": get_now_str(),
+                "TargetApp": "branch",
+                "TargetBranch": b,
+                "Type": "request",
+                "RefID": order,
+                "Message": "คำขอได้รับการอนุมัติแล้ว",
+                "ReadFlag": "",
+                "ReadAt": ""
+            }])
+            alln = pd.concat([notis, new], ignore_index=True)
+            write_df(sh, SHEET_NOTIFS, alln)
+        except Exception:
+            pass
+
+        if errors:
+            st.warning(pd.DataFrame({"ข้อผิดพลาด": errors}))
+        else:
+            st.success("อนุมัติสำเร็จ ✅")
+        st.rerun()
+
+    if c2.button("❌ ปฏิเสธ", use_container_width=True):
+        reqs_all = read_df(sh, SHEET_REQUESTS, REQUESTS_HEADERS).fillna("")
+        mask = (reqs_all["OrderNo"]==order)
+        if "Status" in reqs_all.columns:
+            reqs_all.loc[mask, "Status"] = "REJECTED"
+        if "Approver" in reqs_all.columns:
+            reqs_all.loc[mask, "Approver"] = st.session_state.get("user","system")
+        if "LastUpdate" in reqs_all.columns:
+            reqs_all.loc[mask, "LastUpdate"] = get_now_str()
+        write_df(sh, SHEET_REQUESTS, reqs_all)
+        try:
+            notis = read_df(sh, SHEET_NOTIFS, NOTIFS_HEADERS)
+            new = pd.DataFrame([{
+                "NotiID": str(uuid.uuid4())[:8],
+                "CreatedAt": get_now_str(),
+                "TargetApp": "branch",
+                "TargetBranch": b,
+                "Type": "request",
+                "RefID": order,
+                "Message": "คำขอถูกปฏิเสธ",
+                "ReadFlag": "",
+                "ReadAt": ""
+            }])
+            alln = pd.concat([notis, new], ignore_index=True)
+            write_df(sh, SHEET_NOTIFS, alln)
+        except Exception:
+            pass
+        st.warning("ปฏิเสธแล้ว")
+        st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
 # -------------------- Reports page --------------------
 def is_test_text(s: str) -> bool:
     s = str(s).lower()
@@ -1684,104 +1796,6 @@ def page_settings():
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# -------------------- Requests Page --------------------
-def page_requests(sh):
-    import pandas as pd, streamlit as st, uuid, datetime
-    st.header("🧺 คำขอเบิก (Requests)")
-    try:
-        ws_req = sh.worksheet(SHEET_REQUESTS)
-    except Exception as e:
-        st.error(f"ไม่พบชีต {SHEET_REQUESTS}: {e}")
-        return
-    rows = ws_req.get_all_records()
-    df = pd.DataFrame(rows).fillna("")
-    if df.empty:
-        st.info("ยังไม่มีคำขอเบิกจากสาขา")
-        return
-    pending = df[df["Status"].isin(["", "PENDING"])].copy()
-    if pending.empty:
-        st.success("ไม่มีคำขอที่รออนุมัติ")
-        return
-
-    order_nos = pending["OrderNo"].dropna().unique().tolist()
-    col = st.columns([3,1,1])
-    sel = col[0].selectbox("เลือก OrderNo", order_nos)
-    current = pending[pending["OrderNo"] == sel]
-    st.write(f"**สาขา:** {current['Branch'].iloc[0]}  |  **ผู้ขอ:** {current['Requester'].iloc[0]}  |  **จำนวนรายการ:** {len(current)}")
-    st.dataframe(current[["ItemCode","ItemName","Qty"]], use_container_width=True, hide_index=True)
-
-    if col[1].button("✅ อนุมัติและตัดสต็อก"):
-        _approve_request_and_cut_stock(sh, current)
-        st.success("อนุมัติคำขอเรียบร้อย")
-        st.experimental_rerun()
-    if col[2].button("❌ ปฏิเสธ"):
-        _update_requests_status(sh, current, status="REJECTED")
-        _append_notification(sh, current, "คำขอถูกปฏิเสธ")
-        st.warning("ปฏิเสธแล้ว")
-        st.experimental_rerun()
-
-def _approve_request_and_cut_stock(sh, current_df):
-    # reuse adjust_stock if present; else minimally append to Transactions and reduce Items
-    import pandas as pd, datetime
-    actor = st.session_state.get("username","system")
-    # attempt to use adjust_stock if defined
-    if 'adjust_stock' in globals():
-        for _, r in current_df.iterrows():
-            try:
-                adjust_stock(sh, item_code=r["ItemCode"], qty=int(r["Qty"]), txn_type="OUT",
-                             branch=r.get("Branch",""), actor=actor, note=f"Request {r['OrderNo']}")
-            except Exception as e:
-                st.error(f"ตัดสต็อก {r['ItemCode']} ไม่สำเร็จ: {e}")
-    else:
-        # fallback minimal: append to Transactions
-        try:
-            ws_tx = sh.worksheet(SHEET_TXNS)
-            for _, r in current_df.iterrows():
-                ws_tx.append_row([str(uuid.uuid4())[:8], datetime.datetime.now().isoformat(timespec="seconds"),
-                                  "OUT", r["ItemCode"], r["ItemName"], r.get("Branch",""), int(r["Qty"]), actor,
-                                  f"Request {r['OrderNo']}"])
-        except Exception as e:
-            st.error(f"บันทึกธุรกรรมไม่สำเร็จ: {e}")
-    _update_requests_status(sh, current_df, status="FULFILLED")
-    _append_notification(sh, current_df, "คำขอได้รับการอนุมัติแล้ว")
-
-def _update_requests_status(sh, current_df, status):
-    import pandas as pd, datetime, gspread_dataframe as gd
-    ws = sh.worksheet(SHEET_REQUESTS)
-    data = ws.get_all_records()
-    df = pd.DataFrame(data).fillna("")
-    for _, r in current_df.iterrows():
-        mask = (df["OrderNo"] == r["OrderNo"]) & (df["ItemCode"] == r["ItemCode"])
-        df.loc[mask, "Status"] = status
-        df.loc[mask, "Approver"] = st.session_state.get("username","system")
-        df.loc[mask, "LastUpdate"] = datetime.datetime.now().isoformat(timespec="seconds")
-    gd.set_with_dataframe(ws, df, include_index=False)
-
-def _append_notification(sh, current_df, message):
-    import pandas as pd, uuid, datetime, gspread_dataframe as gd
-    try:
-        ws = sh.worksheet(SHEET_NOTIFS)
-    except Exception:
-        ws = sh.add_worksheet(SHEET_NOTIFS, rows=1000, cols=len(NOTIFS_HEADERS)+2)
-        ws.update("A1", [NOTIFS_HEADERS])
-    base = ws.get_all_records()
-    df = pd.DataFrame(base)
-    if df.empty:
-        df = pd.DataFrame(columns=NOTIFS_HEADERS)
-    for _, r in current_df.iterrows():
-        df.loc[len(df)] = {
-            "NotiID": str(uuid.uuid4())[:8],
-            "CreatedAt": datetime.datetime.now().isoformat(timespec="seconds"),
-            "TargetApp":"branch",
-            "TargetBranch": r.get("Branch",""),
-            "Type":"request",
-            "RefID": r["OrderNo"],
-            "Message": message,
-            "ReadFlag":"",
-            "ReadAt":""
-        }
-    gd.set_with_dataframe(ws, df, include_index=False)
-
 # -------------------- Main --------------------
 def main():
     st.set_page_config(page_title=APP_TITLE, page_icon="🧰", layout="wide")
@@ -1795,7 +1809,7 @@ def main():
 
     with st.sidebar:
         st.markdown("---")
-        page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
+        page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า", MENU_REQUESTS,"📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
 
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
     if not sheet_url:
@@ -1812,7 +1826,7 @@ def main():
     elif page.startswith("📦"): page_stock(sh)
     elif page.startswith("🛠️"): page_tickets(sh)
     elif page.startswith("🧾"): page_issue_receive(sh)
-    elif page.startswith("🧺"): page_requests(sh)
+    elif page.startswith("🧺") or page == MENU_REQUESTS: page_requests(sh)
     elif page.startswith("📑"): page_reports(sh)
     elif page.startswith("👤"): page_users(sh)
     elif page.startswith("นำเข้า"): page_import(sh)
