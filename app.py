@@ -1075,112 +1075,110 @@ def page_reports(sh):
         st.dataframe(out_df[cols], height=320, use_container_width=True)
 
     
+        # --- ADD: พิมพ์ตาราง OUT เป็น PDF (ไม่แตะส่วนอื่น) ---
+        with st.expander("🖨️ พิมพ์รายงาน OUT เป็น PDF", expanded=False):
+            up_logo = st.file_uploader("โลโก้ (PNG/JPG) — ไม่บังคับ", type=["png","jpg","jpeg"], key="logo_out")
+            logo_path = ""
+            if up_logo is not None:
+                import os
+                os.makedirs("./assets", exist_ok=True)
+                logo_path = "./assets/_logo_report_out.png"
+                with open(logo_path, "wb") as f:
+                    f.write(up_logo.read())
 
-# --- ADD: พิมพ์ตาราง OUT เป็น PDF (ไม่แตะส่วนอื่น) ---
-with st.expander("🖨️ พิมพ์รายงาน OUT เป็น PDF", expanded=False):
-    up_logo = st.file_uploader("โลโก้ (PNG/JPG) — ไม่บังคับ", type=["png","jpg","jpeg"], key="logo_out")
-    logo_path = ""
-    if up_logo is not None:
-        import os
-        os.makedirs("./assets", exist_ok=True)
-        logo_path = "./assets/_logo_report_out.png"
-        with open(logo_path, "wb") as f:
-            f.write(up_logo.read())
-
-    def _register_thai_fonts_if_needed():
-        try:
-            from reportlab.pdfbase import pdfmetrics
-            from reportlab.pdfbase.ttfonts import TTFont
-            import os
-            if "TH_REG" in pdfmetrics.getRegisteredFontNames():
-                return True
-            candidates = [
-                "./fonts/THSarabunNew.ttf", "./fonts/Sarabun-Regular.ttf", "./fonts/NotoSansThai-Regular.ttf"
-            ]
-            for p in ("/usr/share/fonts/truetype", "/usr/share/fonts", "/Library/Fonts", "C:\\Windows\\Fonts"):
-                for fn in ("THSarabunNew.ttf","Sarabun-Regular.ttf","NotoSansThai-Regular.ttf"):
-                    candidates.append(os.path.join(p, fn))
-            for reg in candidates:
+            def _register_thai_fonts_if_needed():
                 try:
-                    if os.path.exists(reg):
-                        pdfmetrics.registerFont(TTFont("TH_REG", reg))
-                        pdfmetrics.registerFont(TTFont("TH_BOLD", reg))
+                    from reportlab.pdfbase import pdfmetrics
+                    from reportlab.pdfbase.ttfonts import TTFont
+                    import os
+                    if "TH_REG" in pdfmetrics.getRegisteredFontNames():
                         return True
-                except:
-                    pass
-        except Exception:
-            return False
-        return False
-
-    def _make_pdf_from_df(title, df, logo_path=""):
-        try:
-            import io
-            from reportlab.pdfgen import canvas
-            from reportlab.lib.pagesizes import A4
-            from reportlab.lib.units import mm
-            from reportlab.lib.utils import ImageReader
-            from reportlab.pdfbase import pdfmetrics
-            from datetime import datetime as _dt
-
-            buf = io.BytesIO()
-            c = canvas.Canvas(buf, pagesize=A4)
-            W, H = A4
-
-            if logo_path:
-                try:
-                    c.drawImage(ImageReader(logo_path), 15*mm, H-35*mm, width=25*mm, height=25*mm, preserveAspectRatio=True, mask='auto')
+                    candidates = [
+                        "./fonts/THSarabunNew.ttf", "./fonts/Sarabun-Regular.ttf", "./fonts/NotoSansThai-Regular.ttf"
+                    ]
+                    for p in ("/usr/share/fonts/truetype", "/usr/share/fonts", "/Library/Fonts", "C:\\Windows\\Fonts"):
+                        for fn in ("THSarabunNew.ttf","Sarabun-Regular.ttf","NotoSansThai-Regular.ttf"):
+                            candidates.append(os.path.join(p, fn))
+                    for reg in candidates:
+                        try:
+                            if os.path.exists(reg):
+                                pdfmetrics.registerFont(TTFont("TH_REG", reg))
+                                pdfmetrics.registerFont(TTFont("TH_BOLD", reg))
+                                return True
+                        except:
+                            pass
                 except Exception:
-                    pass
+                    return False
+                return False
 
-            c.setFont("TH_BOLD" if "TH_BOLD" in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold", 16)
-            c.drawString(45*mm, H-20*mm, str(title))
-            c.setFont("TH_REG" if "TH_REG" in pdfmetrics.getRegisteredFontNames() else "Helvetica", 9)
-            c.drawRightString(W-15*mm, H-15*mm, _dt.now().strftime("%Y-%m-%d %H:%M:%S"))
+            def _make_pdf_from_df(title, df, logo_path=""):
+                try:
+                    import io
+                    from reportlab.pdfgen import canvas
+                    from reportlab.lib.pagesizes import A4
+                    from reportlab.lib.units import mm
+                    from reportlab.lib.utils import ImageReader
+                    from reportlab.pdfbase import pdfmetrics
+                    from datetime import datetime as _dt
 
-            cols_pdf = df.columns.tolist()[:8]
-            x0, y0 = 15*mm, H-45*mm
-            row_h = 8*mm
-            col_w = (W - 30*mm) / max(1, len(cols_pdf))
+                    buf = io.BytesIO()
+                    c = canvas.Canvas(buf, pagesize=A4)
+                    W, H = A4
 
-            c.setFont("TH_BOLD" if "TH_BOLD" in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold", 10)
-            for i, col in enumerate(cols_pdf):
-                c.drawString(x0 + i*col_w + 2, y0, str(col))
-            c.line(x0, y0-2, x0 + col_w*len(cols_pdf), y0-2)
+                    if logo_path:
+                        try:
+                            c.drawImage(ImageReader(logo_path), 15*mm, H-35*mm, width=25*mm, height=25*mm, preserveAspectRatio=True, mask='auto')
+                        except Exception:
+                            pass
 
-            c.setFont("TH_REG" if "TH_REG" in pdfmetrics.getRegisteredFontNames() else "Helvetica", 9)
-            y = y0 - row_h
-            for r in df[cols_pdf].astype(str).values.tolist()[:50]:
-                for i, val in enumerate(r):
-                    c.drawString(x0 + i*col_w + 2, y, val[:40])
-                y -= row_h
-                if y < 20*mm:
-                    break
+                    c.setFont("TH_BOLD" if "TH_BOLD" in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold", 16)
+                    c.drawString(45*mm, H-20*mm, str(title))
+                    c.setFont("TH_REG" if "TH_REG" in pdfmetrics.getRegisteredFontNames() else "Helvetica", 9)
+                    c.drawRightString(W-15*mm, H-15*mm, _dt.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-            c.showPage()
-            c.save()
-            buf.seek(0)
-            return buf.getvalue()
-        except Exception as e:
-            st.error(f"สร้าง PDF ไม่สำเร็จ: {e}")
-            return None
+                    cols_pdf = df.columns.tolist()[:8]
+                    x0, y0 = 15*mm, H-45*mm
+                    row_h = 8*mm
+                    col_w = (W - 30*mm) / max(1, len(cols_pdf))
 
-    if st.button("สร้าง PDF (OUT)", key="btn_pdf_out"):
-        try:
-            import reportlab
-        except Exception:
-            st.error("ต้องติดตั้งแพ็กเกจ reportlab ก่อนใช้งาน:  pip install reportlab")
-        else:
-            _register_thai_fonts_if_needed()
-            pdf_bytes = _make_pdf_from_df(f"รายการเบิก (OUT) {d1} → {d2}", out_df[cols], logo_path=logo_path)
-            if pdf_bytes:
-                st.download_button(
-                    "⬇️ ดาวน์โหลด PDF (OUT)",
-                    data=pdf_bytes,
-                    file_name=f"report_out_{d1}_{d2}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
+                    c.setFont("TH_BOLD" if "TH_BOLD" in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold", 10)
+                    for i, col in enumerate(cols_pdf):
+                        c.drawString(x0 + i*col_w + 2, y0, str(col))
+                    c.line(x0, y0-2, x0 + col_w*len(cols_pdf), y0-2)
 
+                    c.setFont("TH_REG" if "TH_REG" in pdfmetrics.getRegisteredFontNames() else "Helvetica", 9)
+                    y = y0 - row_h
+                    for r in df[cols_pdf].astype(str).values.tolist()[:50]:
+                        for i, val in enumerate(r):
+                            c.drawString(x0 + i*col_w + 2, y, val[:40])
+                        y -= row_h
+                        if y < 20*mm:
+                            break
+
+                    c.showPage()
+                    c.save()
+                    buf.seek(0)
+                    return buf.getvalue()
+                except Exception as e:
+                    st.error(f"สร้าง PDF ไม่สำเร็จ: {e}")
+                    return None
+
+            if st.button("สร้าง PDF (OUT)", key="btn_pdf_out"):
+                try:
+                    import reportlab
+                except Exception:
+                    st.error("ต้องติดตั้งแพ็กเกจ reportlab ก่อนใช้งาน:  pip install reportlab")
+                else:
+                    _register_thai_fonts_if_needed()
+                    pdf_bytes = _make_pdf_from_df(f"รายการเบิก (OUT) {d1} → {d2}", out_df[cols], logo_path=logo_path)
+                    if pdf_bytes:
+                        st.download_button(
+                            "⬇️ ดาวน์โหลด PDF (OUT)",
+                            data=pdf_bytes,
+                            file_name=f"report_out_{d1}_{d2}.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
 with tTickets:
         st.markdown("#### ตารางรายการแจ้งปัญหา")
         show_cols = [c for c in ["วันที่แจ้ง","เรื่อง","รายละเอียด","สาขา","ผู้แจ้ง","สถานะ","ผู้รับผิดชอบ","หมายเหตุ","TicketID"] if c in tdf.columns]
@@ -1188,112 +1186,110 @@ with tTickets:
         st.dataframe(tdf_sorted[show_cols], height=320, use_container_width=True)
 
     
+        # --- ADD: พิมพ์ตาราง Tickets เป็น PDF (ไม่แตะส่วนอื่น) ---
+        with st.expander("🖨️ พิมพ์รายงาน Tickets เป็น PDF", expanded=False):
+            up_logo2 = st.file_uploader("โลโก้ (PNG/JPG) — ไม่บังคับ", type=["png","jpg","jpeg"], key="logo_tk")
+            logo_path2 = ""
+            if up_logo2 is not None:
+                import os
+                os.makedirs("./assets", exist_ok=True)
+                logo_path2 = "./assets/_logo_report_tickets.png"
+                with open(logo_path2, "wb") as f:
+                    f.write(up_logo2.read())
 
-# --- ADD: พิมพ์ตาราง Tickets เป็น PDF (ไม่แตะส่วนอื่น) ---
-with st.expander("🖨️ พิมพ์รายงาน Tickets เป็น PDF", expanded=False):
-    up_logo2 = st.file_uploader("โลโก้ (PNG/JPG) — ไม่บังคับ", type=["png","jpg","jpeg"], key="logo_tk")
-    logo_path2 = ""
-    if up_logo2 is not None:
-        import os
-        os.makedirs("./assets", exist_ok=True)
-        logo_path2 = "./assets/_logo_report_tickets.png"
-        with open(logo_path2, "wb") as f:
-            f.write(up_logo2.read())
-
-    def _register_thai_fonts_if_needed_tk():
-        try:
-            from reportlab.pdfbase import pdfmetrics
-            from reportlab.pdfbase.ttfonts import TTFont
-            import os
-            if "TH_REG" in pdfmetrics.getRegisteredFontNames():
-                return True
-            candidates = [
-                "./fonts/THSarabunNew.ttf", "./fonts/Sarabun-Regular.ttf", "./fonts/NotoSansThai-Regular.ttf"
-            ]
-            for p in ("/usr/share/fonts/truetype", "/usr/share/fonts", "/Library/Fonts", "C:\\Windows\\Fonts"):
-                for fn in ("THSarabunNew.ttf","Sarabun-Regular.ttf","NotoSansThai-Regular.ttf"):
-                    candidates.append(os.path.join(p, fn))
-            for reg in candidates:
+            def _register_thai_fonts_if_needed_tk():
                 try:
-                    if os.path.exists(reg):
-                        pdfmetrics.registerFont(TTFont("TH_REG", reg))
-                        pdfmetrics.registerFont(TTFont("TH_BOLD", reg))
+                    from reportlab.pdfbase import pdfmetrics
+                    from reportlab.pdfbase.ttfonts import TTFont
+                    import os
+                    if "TH_REG" in pdfmetrics.getRegisteredFontNames():
                         return True
-                except:
-                    pass
-        except Exception:
-            return False
-        return False
-
-    def _make_pdf_from_df_tk(title, df, logo_path=""):
-        try:
-            import io
-            from reportlab.pdfgen import canvas
-            from reportlab.lib.pagesizes import A4
-            from reportlab.lib.units import mm
-            from reportlab.lib.utils import ImageReader
-            from reportlab.pdfbase import pdfmetrics
-            from datetime import datetime as _dt
-
-            buf = io.BytesIO()
-            c = canvas.Canvas(buf, pagesize=A4)
-            W, H = A4
-
-            if logo_path:
-                try:
-                    c.drawImage(ImageReader(logo_path), 15*mm, H-35*mm, width=25*mm, height=25*mm, preserveAspectRatio=True, mask='auto')
+                    candidates = [
+                        "./fonts/THSarabunNew.ttf", "./fonts/Sarabun-Regular.ttf", "./fonts/NotoSansThai-Regular.ttf"
+                    ]
+                    for p in ("/usr/share/fonts/truetype", "/usr/share/fonts", "/Library/Fonts", "C:\\Windows\\Fonts"):
+                        for fn in ("THSarabunNew.ttf","Sarabun-Regular.ttf","NotoSansThai-Regular.ttf"):
+                            candidates.append(os.path.join(p, fn))
+                    for reg in candidates:
+                        try:
+                            if os.path.exists(reg):
+                                pdfmetrics.registerFont(TTFont("TH_REG", reg))
+                                pdfmetrics.registerFont(TTFont("TH_BOLD", reg))
+                                return True
+                        except:
+                            pass
                 except Exception:
-                    pass
+                    return False
+                return False
 
-            c.setFont("TH_BOLD" if "TH_BOLD" in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold", 16)
-            c.drawString(45*mm, H-20*mm, str(title))
-            c.setFont("TH_REG" if "TH_REG" in pdfmetrics.getRegisteredFontNames() else "Helvetica", 9)
-            c.drawRightString(W-15*mm, H-15*mm, _dt.now().strftime("%Y-%m-%d %H:%M:%S"))
+            def _make_pdf_from_df_tk(title, df, logo_path=""):
+                try:
+                    import io
+                    from reportlab.pdfgen import canvas
+                    from reportlab.lib.pagesizes import A4
+                    from reportlab.lib.units import mm
+                    from reportlab.lib.utils import ImageReader
+                    from reportlab.pdfbase import pdfmetrics
+                    from datetime import datetime as _dt
 
-            cols_pdf = df.columns.tolist()[:8]
-            x0, y0 = 15*mm, H-45*mm
-            row_h = 8*mm
-            col_w = (W - 30*mm) / max(1, len(cols_pdf))
+                    buf = io.BytesIO()
+                    c = canvas.Canvas(buf, pagesize=A4)
+                    W, H = A4
 
-            c.setFont("TH_BOLD" if "TH_BOLD" in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold", 10)
-            for i, col in enumerate(cols_pdf):
-                c.drawString(x0 + i*col_w + 2, y0, str(col))
-            c.line(x0, y0-2, x0 + col_w*len(cols_pdf), y0-2)
+                    if logo_path:
+                        try:
+                            c.drawImage(ImageReader(logo_path), 15*mm, H-35*mm, width=25*mm, height=25*mm, preserveAspectRatio=True, mask='auto')
+                        except Exception:
+                            pass
 
-            c.setFont("TH_REG" if "TH_REG" in pdfmetrics.getRegisteredFontNames() else "Helvetica", 9)
-            y = y0 - row_h
-            for r in df[cols_pdf].astype(str).values.tolist()[:50]:
-                for i, val in enumerate(r):
-                    c.drawString(x0 + i*col_w + 2, y, val[:40])
-                y -= row_h
-                if y < 20*mm:
-                    break
+                    c.setFont("TH_BOLD" if "TH_BOLD" in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold", 16)
+                    c.drawString(45*mm, H-20*mm, str(title))
+                    c.setFont("TH_REG" if "TH_REG" in pdfmetrics.getRegisteredFontNames() else "Helvetica", 9)
+                    c.drawRightString(W-15*mm, H-15*mm, _dt.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-            c.showPage()
-            c.save()
-            buf.seek(0)
-            return buf.getvalue()
-        except Exception as e:
-            st.error(f"สร้าง PDF ไม่สำเร็จ: {e}")
-            return None
+                    cols_pdf = df.columns.tolist()[:8]
+                    x0, y0 = 15*mm, H-45*mm
+                    row_h = 8*mm
+                    col_w = (W - 30*mm) / max(1, len(cols_pdf))
 
-    if st.button("สร้าง PDF (Tickets)", key="btn_pdf_tickets"):
-        try:
-            import reportlab
-        except Exception:
-            st.error("ต้องติดตั้งแพ็กเกจ reportlab ก่อนใช้งาน:  pip install reportlab")
-        else:
-            _register_thai_fonts_if_needed_tk()
-            pdf_bytes = _make_pdf_from_df_tk(f"ประวัติการแจ้งปัญหา {d1} → {d2}", tdf_sorted[show_cols], logo_path=logo_path2)
-            if pdf_bytes:
-                st.download_button(
-                    "⬇️ ดาวน์โหลด PDF (Tickets)",
-                    data=pdf_bytes,
-                    file_name=f"report_tickets_{d1}_{d2}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
+                    c.setFont("TH_BOLD" if "TH_BOLD" in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold", 10)
+                    for i, col in enumerate(cols_pdf):
+                        c.drawString(x0 + i*col_w + 2, y0, str(col))
+                    c.line(x0, y0-2, x0 + col_w*len(cols_pdf), y0-2)
 
+                    c.setFont("TH_REG" if "TH_REG" in pdfmetrics.getRegisteredFontNames() else "Helvetica", 9)
+                    y = y0 - row_h
+                    for r in df[cols_pdf].astype(str).values.tolist()[:50]:
+                        for i, val in enumerate(r):
+                            c.drawString(x0 + i*col_w + 2, y, val[:40])
+                        y -= row_h
+                        if y < 20*mm:
+                            break
+
+                    c.showPage()
+                    c.save()
+                    buf.seek(0)
+                    return buf.getvalue()
+                except Exception as e:
+                    st.error(f"สร้าง PDF ไม่สำเร็จ: {e}")
+                    return None
+
+            if st.button("สร้าง PDF (Tickets)", key="btn_pdf_tickets"):
+                try:
+                    import reportlab
+                except Exception:
+                    st.error("ต้องติดตั้งแพ็กเกจ reportlab ก่อนใช้งาน:  pip install reportlab")
+                else:
+                    _register_thai_fonts_if_needed_tk()
+                    pdf_bytes = _make_pdf_from_df_tk(f"ประวัติการแจ้งปัญหา {d1} → {d2}", tdf_sorted[show_cols], logo_path=logo_path2)
+                    if pdf_bytes:
+                        st.download_button(
+                            "⬇️ ดาวน์โหลด PDF (Tickets)",
+                            data=pdf_bytes,
+                            file_name=f"report_tickets_{d1}_{d2}.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
 def group_period(df, period="ME"):
         dfx = df.copy()
         dfx["วันเวลา"] = pd.to_datetime(dfx["วันเวลา"], errors='coerce')
