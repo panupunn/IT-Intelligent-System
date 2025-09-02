@@ -2012,3 +2012,12 @@ def _update_requests_status(sh, rows_df: pd.DataFrame, new_status: str):
 
     _write_df(ws, df)
 
+
+
+# PATCH: Fallback menu insertion if radio not matched
+try:
+    if 'page' in globals():
+        if st.sidebar.button("🧺 คำขอเบิก"):
+            page = "🧺 คำขอเบิก"
+except Exception:
+    pass
