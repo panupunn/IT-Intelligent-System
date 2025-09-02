@@ -36,6 +36,13 @@ SHEET_CATS        = "Categories"
 SHEET_BRANCHES    = "Branches"
 SHEET_TICKETS     = "Tickets"
 SHEET_TICKET_CATS = "TicketCategories"
+# --- Integration: Branch Requests/Notifications ---
+SHEET_REQUESTS    = "Requests"
+SHEET_NOTIFS      = "Notifications"
+
+REQUESTS_HEADERS  = ["Branch","Requester","CreatedAt","OrderNo","ItemCode","ItemName","Qty","Status","Approver","LastUpdate","Note"]
+NOTIFS_HEADERS    = ["NotiID","CreatedAt","TargetApp","TargetBranch","Type","RefID","Message","ReadFlag","ReadAt"]
+
 
 ITEMS_HEADERS     = ["รหัส","หมวดหมู่","ชื่ออุปกรณ์","หน่วย","คงเหลือ","จุดสั่งซื้อ","ที่เก็บ","ใช้งาน"]
 TXNS_HEADERS      = ["TxnID","วันเวลา","ประเภท","รหัส","ชื่ออุปกรณ์","สาขา","จำนวน","ผู้ดำเนินการ","หมายเหตุ"]
@@ -217,6 +224,9 @@ def write_df(sh, title, df):
     elif title==SHEET_BRANCHES: cols=BR_HEADERS
     elif title==SHEET_TICKETS: cols=TICKETS_HEADERS
     elif title==SHEET_TICKET_CATS: cols=TICKET_CAT_HEADERS
+    elif title==SHEET_REQUESTS: cols=REQUESTS_HEADERS
+    elif title==SHEET_NOTIFS: cols=NOTIFS_HEADERS
+
     else: cols = df.columns.tolist()
     for c in cols:
         if c not in df.columns: df[c] = ""
@@ -265,6 +275,8 @@ def ensure_sheets_exist(sh):
         (SHEET_BRANCHES, BR_HEADERS, 200, len(BR_HEADERS)+2),
         (SHEET_TICKETS, TICKETS_HEADERS, 1000, len(TICKETS_HEADERS)+5),
         (SHEET_TICKET_CATS, TICKET_CAT_HEADERS, 200, len(TICKET_CAT_HEADERS)+2),
+        (SHEET_REQUESTS, REQUESTS_HEADERS, 2000, len(REQUESTS_HEADERS)+5),
+        (SHEET_NOTIFS, NOTIFS_HEADERS, 500, len(NOTIFS_HEADERS)+5),
     ]
 
     try:
@@ -1705,11 +1717,119 @@ def main():
     elif page.startswith("🛠️"): page_tickets(sh)
     elif page.startswith("🧾"): page_issue_receive(sh)
     elif page.startswith("📑"): page_reports(sh)
+        elif page.startswith("🧺"): page_requests(sh)
     elif page.startswith("👤"): page_users(sh)
     elif page.startswith("นำเข้า"): page_import(sh)
     elif page.startswith("⚙️"): page_settings()
 
     st.caption("© 2025 IT Stock · Streamlit + Google Sheets By AOD. · **iTao iT (V.1.1)**")
+
+# -------------------- Requests Approval Page --------------------
+def page_requests(sh):
+    st.header("🧺 คำขอเบิก (Requests)", anchor=False)
+    # Load requests
+    try:
+        reqs = read_df(sh, SHEET_REQUESTS, REQUESTS_HEADERS)
+    except Exception:
+        # Create empty structure if sheet missing
+        reqs = pd.DataFrame(columns=REQUESTS_HEADERS)
+    # Normalize types
+    if not reqs.empty:
+        for c in REQUESTS_HEADERS:
+            if c not in reqs.columns:
+                reqs[c] = ""
+        reqs = reqs[REQUESTS_HEADERS]
+    else:
+        st.info("ยังไม่มีคำขอเบิกเข้ามา", icon="ℹ️")
+        return
+
+    # Filter PENDING
+    pending = reqs[reqs["Status"].astype(str).str.upper().isin(["PENDING"])].copy()
+    if pending.empty:
+        st.success("ไม่มีคำขอที่รออนุมัติ ✅")
+        return
+
+    # Group by OrderNo
+    grp = pending.groupby("OrderNo", as_index=False).agg({
+        "Branch":"first","Requester":"first","CreatedAt":"first","Status":"first"
+    })
+    st.subheader("รายการคำขอที่รออนุมัติ")
+    st.dataframe(grp.rename(columns={
+        "Branch":"สาขา","Requester":"ผู้ขอ","CreatedAt":"เวลา","Status":"สถานะ"
+    }), use_container_width=True, hide_index=True)
+
+    sel = st.multiselect("เลือก OrderNo เพื่ออนุมัติ",
+                         options=grp["OrderNo"].tolist(),
+                         default=[])
+
+    col1, col2 = st.columns(2)
+    with col1:
+        do_approve = st.button("✅ อนุมัติและตัดสต็อก", type="primary", disabled=(len(sel)==0))
+    with col2:
+        do_reject = st.button("❌ ปฏิเสธที่เลือก", disabled=(len(sel)==0))
+
+    if not (do_approve or do_reject):
+        return
+
+    # Load items once
+    items_df = read_df(sh, SHEET_ITEMS, ITEMS_HEADERS)
+
+    updated = reqs.copy()
+    now_str = get_now_str()
+    approver = get_username()
+
+    orders_changed = set()
+
+    for order_no in sel:
+        lines = pending[pending["OrderNo"]==order_no].copy()
+        if lines.empty:
+            continue
+        branch = str(lines["Branch"].iloc[0])
+        if do_approve:
+            # For each line: adjust stock (OUT) and record transaction
+            for _, r in lines.iterrows():
+                code = str(r.get("ItemCode","")).strip()
+                qty  = int(float(r.get("Qty", 0) or 0))
+                if not code or qty<=0:
+                    continue
+                ok = adjust_stock(sh, code, -qty, actor=approver, branch=branch, note=f"Order {order_no}", txn_type="OUT")
+                if not ok:
+                    st.error(f"อนุมัติไม่สำเร็จ: {order_no} / {code}")
+                    continue
+            # Update status -> FULFILLED
+            updated.loc[updated["OrderNo"]==order_no, ["Status","Approver","LastUpdate"]] = ["FULFILLED", approver, now_str]
+            orders_changed.add(order_no)
+        elif do_reject:
+            updated.loc[updated["OrderNo"]==order_no, ["Status","Approver","LastUpdate","Note"]] = ["REJECTED", approver, now_str, "Rejected by approver"]
+            orders_changed.add(order_no)
+
+        # Notification (optional best-effort)
+        try:
+            noti = read_df(sh, SHEET_NOTIFS, NOTIFS_HEADERS)
+        except Exception:
+            noti = pd.DataFrame(columns=NOTIFS_HEADERS)
+        if noti.empty:
+            noti = pd.DataFrame(columns=NOTIFS_HEADERS)
+        msg_type = "APPROVED" if do_approve else "REJECTED"
+        msg = f"{branch} {msg_type} Order {order_no} โดย {approver}"
+        add = pd.DataFrame([{
+            "NotiID": str(uuid.uuid4())[:8],
+            "CreatedAt": now_str,
+            "TargetApp": "branch",
+            "TargetBranch": branch,
+            "Type": msg_type,
+            "RefID": order_no,
+            "Message": msg,
+            "ReadFlag": "",
+            "ReadAt": ""
+        }])
+        noti = pd.concat([noti, add], ignore_index=True)
+        write_df(sh, SHEET_NOTIFS, noti)
+
+    if orders_changed:
+        write_df(sh, SHEET_REQUESTS, updated)
+        st.success(f"อัปเดตคำขอแล้ว: {', '.join(sorted(orders_changed))}")
+        st.rerun()
 
 if __name__ == "__main__":
     main()
