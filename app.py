@@ -1783,7 +1783,17 @@ def _col(df: pd.DataFrame, *candidates: str, default: str | None = None) -> str:
     # fallback
     return mapping.get(default, default or candidates[0])
 
-def ensure_requests_notifs_sheets(sh):
+def ensure_requests_notifs_sheets(sh)
+    # PATCH: Guaranteed sidebar entry & route for 'คำขอเบิก'
+    try:
+        if st.sidebar.button("🧺 คำขอเบิก"):
+            st.session_state["_route_requests"] = True
+    except Exception:
+        pass
+    if st.session_state.get("_route_requests"):
+        page_requests(sh)
+        return
+:
     """Create Requests / Notifications with headers if missing."""
     ws_names = [w.title for w in sh.worksheets()]
     def _ensure(name: str, headers: list[str]):
