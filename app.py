@@ -1698,7 +1698,7 @@ def main():
 
     with st.sidebar:
         st.markdown("---")
-        page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","🧺 คำขอเบิก","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
+        page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
 
     # PATCH: Early route to Requests page
     if isinstance(page, str) and (page == MENU_REQUESTS or page.startswith("🧺")):
@@ -1733,8 +1733,6 @@ def main():
 
     st.caption("© 2025 IT Stock · Streamlit + Google Sheets By AOD. · **iTao iT (V.1.1)**")
 
-if __name__ == "__main__":
-    main()
 
 
 # === PATCH: Requests helpers & page ===
@@ -1872,3 +1870,7 @@ def page_requests(sh):
         st.warning("ปฏิเสธแล้ว"); st.experimental_rerun()
 # === END PATCH ===
 
+
+
+if __name__ == "__main__":
+    main()
