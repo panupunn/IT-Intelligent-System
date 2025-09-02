@@ -21,6 +21,21 @@ import gspread
 from gspread.exceptions import APIError, WorksheetNotFound
 from google.oauth2.service_account import Credentials
 
+
+# === PATCH: Requests integration constants ===
+MENU_REQUESTS = "🧺 คำขอเบิก"
+REQUESTS_SHEET = "Requests"
+NOTIFS_SHEET   = "Notifications"
+
+REQUESTS_HEADERS = [
+    "Branch","Requester","CreatedAt","OrderNo","ItemCode","ItemName","Qty",
+    "Status","Approver","LastUpdate","Note"
+]
+NOTIFS_HEADERS = [
+    "NotiID","CreatedAt","TargetApp","TargetBranch","Type","RefID","Message","ReadFlag","ReadAt"
+]
+# === END PATCH ===
+
 # -------------------- Global constants --------------------
 APP_TITLE   = "ไอต้าว ไอที (iTao iT)"
 APP_TAGLINE = "POWER By ทีมงาน=> ไอทีสุดหล่อ"
@@ -1687,7 +1702,11 @@ def main():
 
     with st.sidebar:
         st.markdown("---")
-        page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","🧺 คำขอเบิก","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
+        page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
+    # PATCH: direct route for Requests menu
+    if isinstance(page, str) and (page == MENU_REQUESTS or page.startswith('🧺')):
+        page_requests(sh)
+        return
 
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
     if not sheet_url:
@@ -1697,11 +1716,6 @@ def main():
     except Exception as e:
         st.error(f"เปิดชีตไม่สำเร็จ: {e}"); return
     ensure_sheets_exist(sh)
-
-    try:
-        ensure_requests_notifs_sheets(sh)
-    except Exception:
-        pass
 
     auth_block(sh)
 
@@ -1714,13 +1728,11 @@ def main():
     elif page.startswith("นำเข้า"): page_import(sh)
     elif page.startswith("⚙️"): page_settings()
 
-    elif page.startswith("🧺") or page == "🧺 คำขอเบิก":
-        page_requests(sh)
-
     st.caption("© 2025 IT Stock · Streamlit + Google Sheets By AOD. · **iTao iT (V.1.1)**")
 
+if __name__ == "__main__":
+    main()
 
-# ---- BEGIN REQUESTS HOTFIX (auto-included) ----
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -2001,8 +2013,3 @@ def _update_requests_status(sh, rows_df: pd.DataFrame, new_status: str):
 
     _write_df(ws, df)
 
-# ---- END REQUESTS HOTFIX ----
-
-
-if __name__ == "__main__":
-    main()
