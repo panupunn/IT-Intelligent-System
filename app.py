@@ -12,6 +12,7 @@ Stable hotfix with restored multi-issue (OUT) flow.
 - Worksheet read caching via st.cache_data(ttl=60) to avoid quota spikes without altering behaviors
 - Version footer: iTao iT (V.1.1)
 """
+from __future__ import annotations
 import os, io, uuid, re, time, base64, json
 from datetime import datetime, date, timedelta, time as dtime
 import pytz, pandas as pd, streamlit as st
@@ -1743,8 +1744,6 @@ Requests Page Hotfix for iTao iT (Streamlit + Google Sheets)
 - Adds helpers to ensure Requests / Notifications sheets exist
 - Safe to paste into main app (replace existing functions/const) or import functions from here
 """
-
-from __future__ import annotations
 import streamlit as st
 import pandas as pd
 from datetime import datetime
