@@ -1700,6 +1700,11 @@ def main():
         st.markdown("---")
         page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","🧺 คำขอเบิก","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
 
+    # PATCH: Early route to Requests page
+    if isinstance(page, str) and (page == MENU_REQUESTS or page.startswith("🧺")):
+        page_requests(sh)
+        return
+
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
     if not sheet_url:
         st.info("ไปที่เมนู **Settings** แล้ววาง Google Sheet URL ที่คุณเป็นเจ้าของ จากนั้นกดปุ่มทดสอบเชื่อมต่อ"); return
@@ -1721,9 +1726,7 @@ def main():
     elif page.startswith("📦"): page_stock(sh)
     elif page.startswith("🛠️"): page_tickets(sh)
     elif page.startswith("🧾"): page_issue_receive(sh)
-    
-    elif page.startswith("🧺") or page == MENU_REQUESTS: page_requests(sh)
-elif page.startswith("📑"): page_reports(sh)
+    elif page.startswith("📑"): page_reports(sh)
     elif page.startswith("👤"): page_users(sh)
     elif page.startswith("นำเข้า"): page_import(sh)
     elif page.startswith("⚙️"): page_settings()
@@ -1734,7 +1737,7 @@ if __name__ == "__main__":
     main()
 
 
-# === PATCH: Requests helpers & page (robust) ===
+# === PATCH: Requests helpers & page ===
 import streamlit as st, pandas as pd, uuid
 from datetime import datetime
 
@@ -1748,7 +1751,10 @@ def ensure_requests_notifs_sheets(sh):
         try:
             ws = sh.add_worksheet(name, rows=1000, cols=max(12, len(headers)+2))
         except Exception:
-            ws = sh.worksheet(name)
+            try:
+                ws = sh.worksheet(name)
+            except Exception:
+                return
         try:
             import gspread_dataframe as gd
             gd.set_with_dataframe(ws, pd.DataFrame(columns=headers), include_index=False)
@@ -1767,7 +1773,9 @@ def _normalize_requests_df(df):
         return pd.DataFrame(columns=REQUESTS_HEADERS)
     df = pd.DataFrame(df).copy().fillna("")
     if "Status" in df.columns:
-        df["Status"] = df["Status"].astype(str).fillna("").map(lambda x: "" if str(x).strip().lower() in ("nan","none","null") else str(x)).str.upper().str.strip()
+        df["Status"] = (df["Status"].astype(str).fillna("")
+                        .map(lambda x: "" if str(x).strip().lower() in ("nan","none","null") else str(x))
+                        .str.upper().str.strip())
     else:
         df["Status"] = ""
     q = "Qty" if "Qty" in df.columns else ("จำนวน" if "จำนวน" in df.columns else None)
