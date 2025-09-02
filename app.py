@@ -1699,10 +1699,9 @@ def main():
     with st.sidebar:
         st.markdown("---")
         page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","🧺 คำขอเบิก","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
-    # PATCH: Early route to Requests page (global lookup to avoid local shadowing)
-    _req_page = globals().get("__it_request_page__")
-    if isinstance(page, str) and (page == MENU_REQUESTS or page.startswith("🧺")) and callable(_req_page):
-        _req_page(sh)
+    # PATCH: Early route to Requests page (no local variables)
+    if isinstance(page, str) and (page == MENU_REQUESTS or page.startswith("🧺")) and callable(globals().get("__it_request_page__")):
+        globals()["__it_request_page__"](sh)
         return
 
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
@@ -1735,7 +1734,7 @@ def main():
 
 
 
-# === PATCH: Requests helpers & page (unique name to avoid shadowing) ===
+# === PATCH: Requests helpers & page (unique name) ===
 import streamlit as st, pandas as pd, uuid
 from datetime import datetime
 
