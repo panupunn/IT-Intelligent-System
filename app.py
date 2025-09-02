@@ -1699,9 +1699,10 @@ def main():
     with st.sidebar:
         st.markdown("---")
         page = st.radio("เมนู", ["📊 Dashboard","📦 คลังอุปกรณ์","🛠️ แจ้งปัญหา","🧾 เบิก/รับเข้า","🧺 คำขอเบิก","📑 รายงาน","👤 ผู้ใช้","นำเข้า/แก้ไข หมวดหมู่","⚙️ Settings"], index=0)
-    # PATCH: Early route to Requests page
-    if isinstance(page, str) and (page == MENU_REQUESTS or page.startswith("🧺")):
-        page_branch_requests(sh)
+    # PATCH: Early route to Requests page (global lookup to avoid local shadowing)
+    _req_page = globals().get("__it_request_page__")
+    if isinstance(page, str) and (page == MENU_REQUESTS or page.startswith("🧺")) and callable(_req_page):
+        _req_page(sh)
         return
 
     sheet_url = st.session_state.get("sheet_url", DEFAULT_SHEET_URL)
@@ -1734,7 +1735,7 @@ def main():
 
 
 
-# === PATCH: Requests helpers & page (renamed: page_branch_requests) ===
+# === PATCH: Requests helpers & page (unique name to avoid shadowing) ===
 import streamlit as st, pandas as pd, uuid
 from datetime import datetime
 
@@ -1836,7 +1837,7 @@ def _call_adjust_or_fallback(sh, r):
     _write_df(ws, pd.concat([cur, pd.DataFrame([row])], ignore_index=True))
     return True
 
-def page_branch_requests(sh):
+def __it_request_page__(sh):
     ensure_requests_notifs_sheets(sh)
     try:
         ws = sh.worksheet(REQUESTS_SHEET); raw = ws.get_all_records()
