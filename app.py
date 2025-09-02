@@ -1113,15 +1113,15 @@ def page_reports(sh):
                 try:
                     import io
                     from reportlab.pdfgen import canvas
-                    from reportlab.lib.pagesizes import A4
+                    from reportlab.lib.pagesizes import A4, landscape
                     from reportlab.lib.units import mm
                     from reportlab.lib.utils import ImageReader
                     from reportlab.pdfbase import pdfmetrics
                     from datetime import datetime as _dt
 
                     buf = io.BytesIO()
-                    c = canvas.Canvas(buf, pagesize=A4)
-                    W, H = A4
+                    c = canvas.Canvas(buf, pagesize=landscape(A4))
+                    W, H = landscape(A4)
 
                     if logo_path:
                         try:
@@ -1223,15 +1223,15 @@ def page_reports(sh):
                 try:
                     import io
                     from reportlab.pdfgen import canvas
-                    from reportlab.lib.pagesizes import A4
+                    from reportlab.lib.pagesizes import A4, landscape
                     from reportlab.lib.units import mm
                     from reportlab.lib.utils import ImageReader
                     from reportlab.pdfbase import pdfmetrics
                     from datetime import datetime as _dt
 
                     buf = io.BytesIO()
-                    c = canvas.Canvas(buf, pagesize=A4)
-                    W, H = A4
+                    c = canvas.Canvas(buf, pagesize=landscape(A4))
+                    W, H = landscape(A4)
 
                     if logo_path:
                         try:
